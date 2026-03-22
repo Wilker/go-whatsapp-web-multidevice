@@ -13,10 +13,13 @@ import (
 )
 
 type stubMessageUsecase struct {
-	downloadResults map[string][]stubDownloadResult
-	downloadCalls   map[string]int
-	batchResponse   domainMessage.RecoverMediaBatchResponse
-	batchErr        error
+	downloadResults     map[string][]stubDownloadResult
+	downloadCalls       map[string]int
+	downloadMediaResp   domainMessage.DownloadMediaResponse
+	downloadMediaErr    error
+	lastDownloadRequest domainMessage.DownloadMediaRequest
+	batchResponse       domainMessage.RecoverMediaBatchResponse
+	batchErr            error
 }
 
 type stubDownloadResult struct {
@@ -48,8 +51,12 @@ func (s *stubMessageUsecase) StarMessage(context.Context, domainMessage.StarRequ
 	return nil
 }
 
-func (s *stubMessageUsecase) DownloadMedia(context.Context, domainMessage.DownloadMediaRequest) (domainMessage.DownloadMediaResponse, error) {
-	return domainMessage.DownloadMediaResponse{}, errors.New("DownloadMedia should not be used in export tests")
+func (s *stubMessageUsecase) DownloadMedia(_ context.Context, request domainMessage.DownloadMediaRequest) (domainMessage.DownloadMediaResponse, error) {
+	s.lastDownloadRequest = request
+	if s.downloadMediaErr != nil {
+		return domainMessage.DownloadMediaResponse{}, s.downloadMediaErr
+	}
+	return s.downloadMediaResp, nil
 }
 
 func (s *stubMessageUsecase) DownloadMediaForExport(_ context.Context, request domainMessage.DownloadMediaRequest) (domainMessage.DownloadMediaResponse, error) {

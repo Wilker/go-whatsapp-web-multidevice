@@ -1275,20 +1275,7 @@ func makeChatExportDir(outputDir, chatName, chatJID string) (string, error) {
 }
 
 func resolveChatExportBaseDir(outputDir string) (string, error) {
-	trimmed := strings.TrimSpace(outputDir)
-	if trimmed == "" {
-		return filepath.Join(config.PathStorages, "exports"), nil
-	}
-
-	if strings.HasPrefix(trimmed, "~/") {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve home directory for output_dir: %w", err)
-		}
-		trimmed = filepath.Join(homeDir, strings.TrimPrefix(trimmed, "~/"))
-	}
-
-	return filepath.Clean(trimmed), nil
+	return utils.ResolveBaseOutputDir(outputDir, filepath.Join(config.PathStorages, "exports"))
 }
 
 func sanitizeExportSlug(value string) string {

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -205,5 +206,48 @@ func TestDownloadMessageMediaViaRetryStopsWhenMediaNotAvailableOnPhone(t *testin
 	}
 	if sendCalls != 1 {
 		t.Fatalf("expected retry flow to stop after first not-available response, got %d sends", sendCalls)
+	}
+}
+
+func TestResolveMediaDownloadDirUsesDefaultPathMedia(t *testing.T) {
+	message := &domainChatStorage.Message{
+		ChatJID:   "120363424157959439@g.us",
+		Timestamp: time.Date(2026, 3, 10, 11, 14, 0, 0, time.UTC),
+	}
+
+	baseDir, dateDir, err := resolveMediaDownloadDir("", message)
+	if err != nil {
+		t.Fatalf("resolveMediaDownloadDir() unexpected error: %v", err)
+	}
+
+	if baseDir != filepath.Clean("statics/media") {
+		t.Fatalf("expected default media base dir, got %q", baseDir)
+	}
+	expectedDateDir := filepath.Join("statics/media", "120363424157959439", "2026-03-10")
+	if dateDir != expectedDateDir {
+		t.Fatalf("expected date dir %q, got %q", expectedDateDir, dateDir)
+	}
+}
+
+func TestResolveMediaDownloadDirExpandsCustomOutputDir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	message := &domainChatStorage.Message{
+		ChatJID:   "5511999999999@s.whatsapp.net",
+		Timestamp: time.Date(2026, 3, 10, 11, 14, 0, 0, time.UTC),
+	}
+
+	baseDir, dateDir, err := resolveMediaDownloadDir("~/Downloads/whatsapp", message)
+	if err != nil {
+		t.Fatalf("resolveMediaDownloadDir() unexpected error: %v", err)
+	}
+
+	expectedBaseDir := filepath.Join(homeDir, "Downloads", "whatsapp")
+	if baseDir != expectedBaseDir {
+		t.Fatalf("expected expanded base dir %q, got %q", expectedBaseDir, baseDir)
+	}
+	expectedDateDir := filepath.Join(expectedBaseDir, "5511999999999", "2026-03-10")
+	if dateDir != expectedDateDir {
+		t.Fatalf("expected date dir %q, got %q", expectedDateDir, dateDir)
 	}
 }

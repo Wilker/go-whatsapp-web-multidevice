@@ -669,6 +669,9 @@ func (h *QueryHandler) toolDownloadMedia() mcp.Tool {
 			mcp.Description("The target chat phone number or JID associated with the message."),
 			mcp.Required(),
 		),
+		mcp.WithString("output_dir",
+			mcp.Description("Optional base directory where the downloaded media should be stored. Supports ~/ paths."),
+		),
 	)
 }
 
@@ -693,6 +696,7 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 	req := domainMessage.DownloadMediaRequest{
 		MessageID: messageID,
 		Phone:     phone,
+		OutputDir: strings.TrimSpace(request.GetString("output_dir", "")),
 	}
 
 	resp, err := h.messageService.DownloadMedia(ctx, req)
@@ -701,17 +705,19 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 	}
 
 	fallback := fmt.Sprintf(
-		"Downloaded media\nmessage_id: %s\nchat: %s\nmedia_type: %s\nfilename: %s\nfile_path: %s\nfile_size: %d\nrecovery_method: %s",
+		"Downloaded media\nmessage_id: %s\nchat: %s\nmedia_type: %s\nfilename: %s\nfile_path: %s\noutput_dir_used: %s\nfile_size: %d\nrecovery_method: %s",
 		resp.MessageID,
 		phone,
 		resp.MediaType,
 		resp.Filename,
 		resp.FilePath,
+		resp.OutputDirUsed,
 		resp.FileSize,
 		resp.RecoveryMethod,
 	)
 	resultPayload := map[string]any{
-		"message_id": resp.MessageID,
+		"message_id":      resp.MessageID,
+		"output_dir_used": resp.OutputDirUsed,
 		"chat": map[string]any{
 			"jid": phone,
 		},
@@ -720,6 +726,7 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 			"filename":        resp.Filename,
 			"path":            resp.FilePath,
 			"size_bytes":      resp.FileSize,
+			"output_dir_used": resp.OutputDirUsed,
 			"recovery_method": resp.RecoveryMethod,
 			"failure_reason":  resp.FailureReason,
 		},

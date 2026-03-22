@@ -41,6 +41,7 @@ type StarRequest struct {
 type DownloadMediaRequest struct {
 	MessageID string `json:"message_id" uri:"message_id"`
 	Phone     string `json:"phone" form:"phone"`
+	OutputDir string `json:"output_dir" form:"output_dir"`
 }
 
 type RecoverMediaBatchRequest struct {
@@ -81,6 +82,7 @@ type DownloadMediaResponse struct {
 	Filename       string `json:"filename"`
 	FilePath       string `json:"file_path"`
 	FileSize       int64  `json:"file_size"`
+	OutputDirUsed  string `json:"output_dir_used,omitempty"`
 	RecoveryMethod string `json:"recovery_method,omitempty"`
 	FailureReason  string `json:"failure_reason,omitempty"`
 }

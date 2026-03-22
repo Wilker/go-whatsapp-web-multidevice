@@ -332,9 +332,11 @@ func (service serviceMessage) downloadMediaWithProfile(
 		return response, fmt.Errorf("message %s does not belong to chat %s", request.MessageID, dataWaRecipient.String())
 	}
 
-	// Create directory structure for organized storage
-	chatDir := filepath.Join(config.PathMedia, utils.ExtractPhoneNumber(message.ChatJID))
-	dateDir := filepath.Join(chatDir, message.Timestamp.Format("2006-01-02"))
+	baseDir, dateDir, err := resolveMediaDownloadDir(request.OutputDir, message)
+	if err != nil {
+		return response, err
+	}
+	response.OutputDirUsed = baseDir
 
 	err = os.MkdirAll(dateDir, 0755)
 	if err != nil {
@@ -370,6 +372,7 @@ func (service serviceMessage) downloadMediaWithProfile(
 	response.MediaType = message.MediaType
 	response.Filename = filepath.Base(downloadResult.extractedMedia.MediaPath)
 	response.FilePath = downloadResult.extractedMedia.MediaPath
+	response.OutputDirUsed = baseDir
 	response.RecoveryMethod = downloadResult.recoveryMethod
 	response.FailureReason = domainMessage.MediaFailureReasonNone
 	if fileInfo != nil {
@@ -863,6 +866,17 @@ func hasStoredDirectPath(message *domainChatStorage.Message) bool {
 		return false
 	}
 	return strings.TrimSpace(message.DirectPath) != ""
+}
+
+func resolveMediaDownloadDir(outputDir string, message *domainChatStorage.Message) (baseDir string, dateDir string, err error) {
+	baseDir, err = utils.ResolveBaseOutputDir(outputDir, config.PathMedia)
+	if err != nil {
+		return "", "", err
+	}
+
+	chatDir := filepath.Join(baseDir, utils.ExtractPhoneNumber(message.ChatJID))
+	dateDir = filepath.Join(chatDir, message.Timestamp.Format("2006-01-02"))
+	return baseDir, dateDir, nil
 }
 
 func (service serviceMessage) getStoredMessageForRequest(ctx context.Context, messageID string) (*domainChatStorage.Message, error) {

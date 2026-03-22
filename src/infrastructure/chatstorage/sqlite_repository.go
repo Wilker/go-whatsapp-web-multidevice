@@ -1032,11 +1032,11 @@ func (r *SQLiteRepository) StoreSentMessageWithContext(ctx context.Context, mess
 	}
 
 	// Extract media info from the protobuf message if available
-	var mediaType, filename, mediaURL string
+	var mediaType, filename, mediaURL, directPath string
 	var mediaKey, fileSHA256, fileEncSHA256 []byte
 	var fileLength uint64
 	if msg != nil {
-		mediaType, filename, mediaURL, mediaKey, fileSHA256, fileEncSHA256, fileLength = utils.ExtractMediaInfo(msg)
+		mediaType, filename, mediaURL, directPath, mediaKey, fileSHA256, fileEncSHA256, fileLength = utils.ExtractMediaInfo(msg)
 	}
 
 	// Store the sent message
@@ -1051,6 +1051,7 @@ func (r *SQLiteRepository) StoreSentMessageWithContext(ctx context.Context, mess
 		MediaType:     mediaType,
 		Filename:      filename,
 		URL:           mediaURL,
+		DirectPath:    directPath,
 		MediaKey:      mediaKey,
 		FileSHA256:    fileSHA256,
 		FileEncSHA256: fileEncSHA256,

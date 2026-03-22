@@ -165,6 +165,7 @@ func (controller *Message) DownloadMedia(c *fiber.Ctx) error {
 
 	request.MessageID = c.Params("message_id")
 	request.Phone = c.Query("phone")
+	request.OutputDir = c.Query("output_dir")
 	utils.SanitizePhone(&request.Phone)
 
 	ctx := c.UserContext()

@@ -334,7 +334,7 @@ protocol. Below is the complete list of available tools:
 - `whatsapp_export_chat_async_start` - Start a background export job for long-running full exports with media and return a `job_id` immediately
 - `whatsapp_export_chat_async_status` - Check the current state, progress counters, and known output paths of an async export job
 - `whatsapp_export_chat_async_result` - Fetch the final export payload after an async export job completes
-- `whatsapp_download_message_media` - Download images/videos from messages
+- `whatsapp_download_message_media` - Download media from a message, with optional `output_dir` override for where the file is saved
 - `whatsapp_archive_chat` - Archive or unarchive a chat conversation
 
 ##### **👥 Group Management**
