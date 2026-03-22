@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	domainSend "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/send"
 	mcpHelpers "github.com/aldinokemal/go-whatsapp-web-multidevice/ui/mcp/helpers"
@@ -105,7 +106,44 @@ func (s *SendHandler) handleSendText(ctx context.Context, request mcp.CallToolRe
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Message sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded":   isForwarded,
+		"text":           message,
+		"text_preview":   truncateForMCP(message, 140),
+		"mentions":       mentions,
+		"mentions_count": len(mentions),
+	}
+	if replyMessageId != "" {
+		structured["reply_to_message_id"] = replyMessageId
+	}
+	fallback := fmt.Sprintf(
+		"Text message sent\nto: %s\nmessage_id: %s\nstatus: %s\nmentions_count: %d\nmessage_preview: %s",
+		phone,
+		res.MessageID,
+		status,
+		len(mentions),
+		truncateForMCP(message, 140),
+	)
+	if replyMessageId != "" {
+		fallback += "\nreply_message_id: " + replyMessageId
+	}
+
+	requestPayload := map[string]any{
+		"phone":          phone,
+		"is_forwarded":   isForwarded,
+		"message":        message,
+		"mentions":       mentions,
+		"mentions_count": len(mentions),
+	}
+	if replyMessageId != "" {
+		requestPayload["reply_message_id"] = replyMessageId
+	}
+	return newStandardToolResult("whatsapp_send_text", res.Status, requestPayload, structured, fallback), nil
 }
 
 func (s *SendHandler) toolSendContact() mcp.Tool {
@@ -170,7 +208,33 @@ func (s *SendHandler) handleSendContact(ctx context.Context, request mcp.CallToo
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Contact sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded": isForwarded,
+		"contact": map[string]any{
+			"name":  contactName,
+			"phone": contactPhone,
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Contact sent\nto: %s\nmessage_id: %s\nstatus: %s\ncontact_name: %s\ncontact_phone: %s",
+		phone,
+		res.MessageID,
+		status,
+		contactName,
+		contactPhone,
+	)
+	requestPayload := map[string]any{
+		"phone":         phone,
+		"is_forwarded":  isForwarded,
+		"contact_name":  contactName,
+		"contact_phone": contactPhone,
+	}
+	return newStandardToolResult("whatsapp_send_contact", res.Status, requestPayload, structured, fallback), nil
 }
 
 func (s *SendHandler) toolSendLink() mcp.Tool {
@@ -235,7 +299,34 @@ func (s *SendHandler) handleSendLink(ctx context.Context, request mcp.CallToolRe
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Link sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded": isForwarded,
+		"link": map[string]any{
+			"url":             link,
+			"caption":         caption,
+			"caption_preview": truncateForMCP(caption, 140),
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Link sent\nto: %s\nmessage_id: %s\nstatus: %s\nlink: %s\ncaption_preview: %s",
+		phone,
+		res.MessageID,
+		status,
+		link,
+		truncateForMCP(caption, 140),
+	)
+	requestPayload := map[string]any{
+		"phone":        phone,
+		"is_forwarded": isForwarded,
+		"link":         link,
+		"caption":      caption,
+	}
+	return newStandardToolResult("whatsapp_send_link", res.Status, requestPayload, structured, fallback), nil
 }
 
 func (s *SendHandler) toolSendLocation() mcp.Tool {
@@ -300,7 +391,33 @@ func (s *SendHandler) handleSendLocation(ctx context.Context, request mcp.CallTo
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Location sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded": isForwarded,
+		"location": map[string]any{
+			"latitude":  latitude,
+			"longitude": longitude,
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Location sent\nto: %s\nmessage_id: %s\nstatus: %s\nlatitude: %s\nlongitude: %s",
+		phone,
+		res.MessageID,
+		status,
+		latitude,
+		longitude,
+	)
+	requestPayload := map[string]any{
+		"phone":        phone,
+		"is_forwarded": isForwarded,
+		"latitude":     latitude,
+		"longitude":    longitude,
+	}
+	return newStandardToolResult("whatsapp_send_location", res.Status, requestPayload, structured, fallback), nil
 }
 
 func (s *SendHandler) toolSendImage() mcp.Tool {
@@ -385,7 +502,40 @@ func (s *SendHandler) handleSendImage(ctx context.Context, request mcp.CallToolR
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Image sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded": isForwarded,
+		"image": map[string]any{
+			"url":             imageURL,
+			"caption":         caption,
+			"caption_preview": truncateForMCP(caption, 140),
+			"view_once":       viewOnce,
+			"compress":        compress,
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Image sent\nto: %s\nmessage_id: %s\nstatus: %s\nimage_url: %s\nview_once: %t\ncompress: %t\ncaption_preview: %s",
+		phone,
+		res.MessageID,
+		status,
+		imageURL,
+		viewOnce,
+		compress,
+		truncateForMCP(caption, 140),
+	)
+	requestPayload := map[string]any{
+		"phone":        phone,
+		"is_forwarded": isForwarded,
+		"image_url":    imageURL,
+		"caption":      caption,
+		"view_once":    viewOnce,
+		"compress":     compress,
+	}
+	return newStandardToolResult("whatsapp_send_image", res.Status, requestPayload, structured, fallback), nil
 }
 
 func (s *SendHandler) toolSendSticker() mcp.Tool {
@@ -440,5 +590,48 @@ func (s *SendHandler) handleSendSticker(ctx context.Context, request mcp.CallToo
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Sticker sent successfully with ID %s", res.MessageID)), nil
+	status := normalizedStatus(res.Status)
+	structured := map[string]any{
+		"message_id": res.MessageID,
+		"recipient": map[string]any{
+			"id": phone,
+		},
+		"is_forwarded": isForwarded,
+		"sticker": map[string]any{
+			"url": stickerURL,
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Sticker sent\nto: %s\nmessage_id: %s\nstatus: %s\nsticker_url: %s",
+		phone,
+		res.MessageID,
+		status,
+		stickerURL,
+	)
+	requestPayload := map[string]any{
+		"phone":        phone,
+		"is_forwarded": isForwarded,
+		"sticker_url":  stickerURL,
+	}
+	return newStandardToolResult("whatsapp_send_sticker", res.Status, requestPayload, structured, fallback), nil
+}
+
+func normalizedStatus(status string) string {
+	return normalizeEnvelopeStatus(status)
+}
+
+func truncateForMCP(text string, maxRunes int) string {
+	trimmed := strings.TrimSpace(text)
+	if maxRunes <= 0 {
+		return ""
+	}
+
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }

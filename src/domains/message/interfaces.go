@@ -17,6 +17,8 @@ type IMessageManagement interface {
 	DeleteMessage(ctx context.Context, request DeleteRequest) (err error)
 	StarMessage(ctx context.Context, request StarRequest) (err error)
 	DownloadMedia(ctx context.Context, request DownloadMediaRequest) (response DownloadMediaResponse, err error)
+	DownloadMediaForExport(ctx context.Context, request DownloadMediaRequest) (response DownloadMediaResponse, err error)
+	RecoverMediaBatch(ctx context.Context, request RecoverMediaBatchRequest) (response RecoverMediaBatchResponse, err error)
 }
 
 // IMessageUsecase combines all message interfaces

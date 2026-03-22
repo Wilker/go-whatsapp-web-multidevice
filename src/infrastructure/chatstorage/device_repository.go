@@ -75,7 +75,15 @@ func (r *DeviceRepository) StoreMessagesBatch(messages []*domainChatStorage.Mess
 }
 
 func (r *DeviceRepository) GetMessageByID(id string) (*domainChatStorage.Message, error) {
-	return r.base.GetMessageByID(id)
+	return r.base.GetMessageByIDByDevice(r.deviceID, id)
+}
+
+func (r *DeviceRepository) GetMessageByIDByDevice(deviceID, id string) (*domainChatStorage.Message, error) {
+	targetDeviceID := deviceID
+	if targetDeviceID == "" {
+		targetDeviceID = r.deviceID
+	}
+	return r.base.GetMessageByIDByDevice(targetDeviceID, id)
 }
 
 func (r *DeviceRepository) GetMessages(filter *domainChatStorage.MessageFilter) ([]*domainChatStorage.Message, error) {

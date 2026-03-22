@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -86,13 +87,36 @@ func (h *GroupHandler) handleCreateGroup(ctx context.Context, request mcp.CallTo
 	}
 
 	structured := map[string]any{
-		"group_id": groupID,
-		"title":    strings.TrimSpace(title),
-		"members":  len(participants),
+		"group": map[string]any{
+			"jid":  groupID,
+			"name": strings.TrimSpace(title),
+		},
+		"participants": map[string]any{
+			"requested":       participants,
+			"requested_count": len(participants),
+		},
 	}
-
-	fallback := fmt.Sprintf("Created group %s with %d members", groupID, len(participants))
-	return mcp.NewToolResultStructured(structured, fallback), nil
+	fallback := fmt.Sprintf(
+		"Group created\ngroup_id: %s\ntitle: %s\nparticipants_requested: %d",
+		groupID,
+		strings.TrimSpace(title),
+		len(participants),
+	)
+	if len(participants) > 0 {
+		previewCount := len(participants)
+		if previewCount > 20 {
+			previewCount = 20
+		}
+		fallback += "\nparticipants_preview: " + strings.Join(participants[:previewCount], ", ")
+		if len(participants) > previewCount {
+			fallback += fmt.Sprintf("\n...and %d more participants.", len(participants)-previewCount)
+		}
+	}
+	requestPayload := map[string]any{
+		"title":        strings.TrimSpace(title),
+		"participants": participants,
+	}
+	return newStandardToolResult("whatsapp_group_create", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolJoinGroup() mcp.Tool {
@@ -127,12 +151,20 @@ func (h *GroupHandler) handleJoinGroup(ctx context.Context, request mcp.CallTool
 	}
 
 	structured := map[string]any{
-		"group_id":    groupID,
-		"invite_link": link,
+		"group": map[string]any{
+			"jid": groupID,
+		},
+		"invite_link": strings.TrimSpace(link),
 	}
-
-	fallback := fmt.Sprintf("Joined group %s", groupID)
-	return mcp.NewToolResultStructured(structured, fallback), nil
+	fallback := fmt.Sprintf(
+		"Joined group via invite link\ngroup_id: %s\ninvite_link: %s",
+		groupID,
+		strings.TrimSpace(link),
+	)
+	requestPayload := map[string]any{
+		"invite_link": strings.TrimSpace(link),
+	}
+	return newStandardToolResult("whatsapp_group_join_via_link", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolLeaveGroup() mcp.Tool {
@@ -168,7 +200,17 @@ func (h *GroupHandler) handleLeaveGroup(ctx context.Context, request mcp.CallToo
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Left group %s", trimmed)), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"state": "left",
+	}
+	fallback := fmt.Sprintf("Left group\ngroup_id: %s", trimmed)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+	}
+	return newStandardToolResult("whatsapp_group_leave", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolGetParticipants() mcp.Tool {
@@ -205,8 +247,12 @@ func (h *GroupHandler) handleGetParticipants(ctx context.Context, request mcp.Ca
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Group %s has %d participants", resp.GroupID, len(resp.Participants))
-	return mcp.NewToolResultStructured(resp, fallback), nil
+	fallback := buildGroupParticipantsFallback(resp)
+	resultPayload := buildGroupParticipantsResultPayload(resp)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+	}
+	return newStandardToolResult("whatsapp_group_participants", "success", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *GroupHandler) toolManageParticipants() mcp.Tool {
@@ -286,8 +332,26 @@ func (h *GroupHandler) handleManageParticipants(ctx context.Context, request mcp
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Applied %s to %d participants in %s", strings.ToLower(actionStr), len(participants), trimmed)
-	return mcp.NewToolResultStructured(result, fallback), nil
+	successCount, errorCount := summarizeParticipantStatuses(result)
+	statusItems := buildParticipantStatusItems(result)
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"participant_action":     strings.ToLower(strings.TrimSpace(actionStr)),
+		"requested_participants": participants,
+		"requested_count":        len(participants),
+		"items":                  statusItems,
+		"success_count":          successCount,
+		"error_count":            errorCount,
+	}
+	fallback := buildParticipantStatusFallback(trimmed, strings.ToLower(strings.TrimSpace(actionStr)), participants, result)
+	requestPayload := map[string]any{
+		"group_id":     trimmed,
+		"participants": participants,
+		"action":       strings.ToLower(strings.TrimSpace(actionStr)),
+	}
+	return newStandardToolResult("whatsapp_group_manage_participants", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolGetInviteLink() mcp.Tool {
@@ -342,8 +406,24 @@ func (h *GroupHandler) handleGetInviteLink(ctx context.Context, request mcp.Call
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Invite link for %s: %s", trimmed, resp.InviteLink)
-	return mcp.NewToolResultStructured(resp, fallback), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"invite_link": resp.InviteLink,
+		"reset":       reset,
+	}
+	fallback := fmt.Sprintf(
+		"Group invite link\ngroup_id: %s\nreset: %t\ninvite_link: %s",
+		trimmed,
+		reset,
+		resp.InviteLink,
+	)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+		"reset":    reset,
+	}
+	return newStandardToolResult("whatsapp_group_invite_link", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolGroupInfo() mcp.Tool {
@@ -380,8 +460,12 @@ func (h *GroupHandler) handleGroupInfo(ctx context.Context, request mcp.CallTool
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Fetched group info for %s", trimmed)
-	return mcp.NewToolResultStructured(resp, fallback), nil
+	structured := buildGroupInfoResultPayload(trimmed, resp)
+	fallback := buildGroupInfoFallback(trimmed, resp)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+	}
+	return newStandardToolResult("whatsapp_group_info", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolSetGroupName() mcp.Tool {
@@ -426,7 +510,22 @@ func (h *GroupHandler) handleSetGroupName(ctx context.Context, request mcp.CallT
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Updated group %s name to %s", trimmed, strings.TrimSpace(name))), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid":  trimmed,
+			"name": strings.TrimSpace(name),
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Group name updated\ngroup_id: %s\ngroup_name: %s",
+		trimmed,
+		strings.TrimSpace(name),
+	)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+		"name":     strings.TrimSpace(name),
+	}
+	return newStandardToolResult("whatsapp_group_set_name", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolSetGroupTopic() mcp.Tool {
@@ -471,7 +570,22 @@ func (h *GroupHandler) handleSetGroupTopic(ctx context.Context, request mcp.Call
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Updated group %s topic", trimmed)), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid":   trimmed,
+			"topic": strings.TrimSpace(topic),
+		},
+	}
+	fallback := fmt.Sprintf(
+		"Group topic updated\ngroup_id: %s\ngroup_topic: %s",
+		trimmed,
+		strings.TrimSpace(topic),
+	)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+		"topic":    strings.TrimSpace(topic),
+	}
+	return newStandardToolResult("whatsapp_group_set_topic", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolSetGroupLocked() mcp.Tool {
@@ -531,7 +645,24 @@ func (h *GroupHandler) handleSetGroupLocked(ctx context.Context, request mcp.Cal
 		state = "locked"
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Group %s is now %s", trimmed, state)), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"locked": locked,
+		"state":  state,
+	}
+	fallback := fmt.Sprintf(
+		"Group lock setting updated\ngroup_id: %s\nlocked: %t\nstate: %s",
+		trimmed,
+		locked,
+		state,
+	)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+		"locked":   locked,
+	}
+	return newStandardToolResult("whatsapp_group_set_locked", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolSetGroupAnnounce() mcp.Tool {
@@ -591,7 +722,24 @@ func (h *GroupHandler) handleSetGroupAnnounce(ctx context.Context, request mcp.C
 		state = "announcement-only"
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Group %s is now in %s mode", trimmed, state)), nil
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"announce_only": announce,
+		"state":         state,
+	}
+	fallback := fmt.Sprintf(
+		"Group announce mode updated\ngroup_id: %s\nannounce: %t\nstate: %s",
+		trimmed,
+		announce,
+		state,
+	)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+		"announce": announce,
+	}
+	return newStandardToolResult("whatsapp_group_set_announce", "success", requestPayload, structured, fallback), nil
 }
 
 func (h *GroupHandler) toolListGroupJoinRequests() mcp.Tool {
@@ -628,8 +776,12 @@ func (h *GroupHandler) handleListGroupJoinRequests(ctx context.Context, request 
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Group %s has %d pending requests", trimmed, len(resp))
-	return mcp.NewToolResultStructured(resp, fallback), nil
+	fallback := buildGroupJoinRequestsFallback(trimmed, resp)
+	resultPayload := buildGroupJoinRequestsResultPayload(trimmed, resp)
+	requestPayload := map[string]any{
+		"group_id": trimmed,
+	}
+	return newStandardToolResult("whatsapp_group_join_requests", "success", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *GroupHandler) toolManageGroupJoinRequests() mcp.Tool {
@@ -721,8 +873,26 @@ func (h *GroupHandler) handleManageGroupJoinRequests(ctx context.Context, reques
 		actionReadable = strings.ToUpper(actionVerb[:1]) + actionVerb[1:]
 	}
 
-	fallback := fmt.Sprintf("%s %d pending requests for %s", actionReadable, len(participants), trimmed)
-	return mcp.NewToolResultStructured(result, fallback), nil
+	successCount, errorCount := summarizeParticipantStatuses(result)
+	statusItems := buildParticipantStatusItems(result)
+	structured := map[string]any{
+		"group": map[string]any{
+			"jid": trimmed,
+		},
+		"request_action":         strings.ToLower(strings.TrimSpace(actionStr)),
+		"requested_participants": participants,
+		"requested_count":        len(participants),
+		"items":                  statusItems,
+		"success_count":          successCount,
+		"error_count":            errorCount,
+	}
+	fallback := buildParticipantStatusFallback(trimmed, actionReadable, participants, result)
+	requestPayload := map[string]any{
+		"group_id":     trimmed,
+		"participants": participants,
+		"action":       strings.ToLower(strings.TrimSpace(actionStr)),
+	}
+	return newStandardToolResult("whatsapp_group_manage_join_requests", "success", requestPayload, structured, fallback), nil
 }
 
 func parseParticipantChange(action string) (whatsmeow.ParticipantChange, error) {
@@ -776,4 +946,338 @@ func toStringSlice(raw any) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("participants must be an array of strings")
 	}
+}
+
+func buildGroupParticipantsResultPayload(resp domainGroup.GetGroupParticipantsResponse) map[string]any {
+	items := make([]map[string]any, 0, len(resp.Participants))
+	for _, participant := range resp.Participants {
+		role := "member"
+		if participant.IsSuperAdmin {
+			role = "super_admin"
+		} else if participant.IsAdmin {
+			role = "admin"
+		}
+
+		name := strings.TrimSpace(participant.DisplayName)
+		if name == "" {
+			name = "(no name)"
+		}
+
+		items = append(items, map[string]any{
+			"jid":   participant.JID,
+			"name":  name,
+			"phone": participant.PhoneNumber,
+			"role":  role,
+		})
+	}
+
+	groupName := strings.TrimSpace(resp.Name)
+	if groupName == "" {
+		groupName = "(no group name)"
+	}
+
+	return map[string]any{
+		"group": map[string]any{
+			"jid":  resp.GroupID,
+			"name": groupName,
+		},
+		"items": items,
+		"count": len(items),
+	}
+}
+
+func buildGroupJoinRequestsResultPayload(groupID string, requests []domainGroup.GetGroupRequestParticipantsResponse) map[string]any {
+	items := make([]map[string]any, 0, len(requests))
+	for _, req := range requests {
+		name := strings.TrimSpace(req.DisplayName)
+		if name == "" {
+			name = "(no name)"
+		}
+
+		items = append(items, map[string]any{
+			"jid":          req.JID,
+			"name":         name,
+			"phone":        req.PhoneNumber,
+			"requested_at": req.RequestedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	return map[string]any{
+		"group": map[string]any{
+			"jid": groupID,
+		},
+		"items": items,
+		"count": len(items),
+	}
+}
+
+func buildParticipantStatusItems(results []domainGroup.ParticipantStatus) []map[string]any {
+	items := make([]map[string]any, 0, len(results))
+	for _, status := range results {
+		items = append(items, map[string]any{
+			"jid":     status.Participant,
+			"status":  strings.ToLower(strings.TrimSpace(status.Status)),
+			"message": status.Message,
+		})
+	}
+	return items
+}
+
+func buildGroupParticipantsFallback(resp domainGroup.GetGroupParticipantsResponse) string {
+	const maxPreview = 20
+
+	total := len(resp.Participants)
+	if total == 0 {
+		return fmt.Sprintf("Group %s (%s) has no participants.", resp.GroupID, strings.TrimSpace(resp.Name))
+	}
+
+	previewCount := total
+	if previewCount > maxPreview {
+		previewCount = maxPreview
+	}
+
+	groupName := strings.TrimSpace(resp.Name)
+	if groupName == "" {
+		groupName = "(no group name)"
+	}
+
+	lines := make([]string, 0, previewCount+2)
+	lines = append(lines, fmt.Sprintf("Group %s | %s\nParticipants: %d", groupName, resp.GroupID, total))
+	for i := 0; i < previewCount; i++ {
+		p := resp.Participants[i]
+		name := strings.TrimSpace(p.DisplayName)
+		if name == "" {
+			name = "(no name)"
+		}
+
+		role := "member"
+		if p.IsSuperAdmin {
+			role = "super_admin"
+		} else if p.IsAdmin {
+			role = "admin"
+		}
+
+		lines = append(lines, fmt.Sprintf("%d. %s | %s | role=%s", i+1, name, p.JID, role))
+	}
+
+	if total > previewCount {
+		lines = append(lines, fmt.Sprintf("...and %d more participants.", total-previewCount))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildGroupJoinRequestsFallback(groupID string, requests []domainGroup.GetGroupRequestParticipantsResponse) string {
+	const maxPreview = 20
+
+	total := len(requests)
+	if total == 0 {
+		return fmt.Sprintf("Group %s has no pending join requests.", groupID)
+	}
+
+	previewCount := total
+	if previewCount > maxPreview {
+		previewCount = maxPreview
+	}
+
+	lines := make([]string, 0, previewCount+2)
+	lines = append(lines, fmt.Sprintf("Group %s has %d pending join requests:", groupID, total))
+	for i := 0; i < previewCount; i++ {
+		req := requests[i]
+		name := strings.TrimSpace(req.DisplayName)
+		if name == "" {
+			name = "(no name)"
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s | %s | requested_at=%s", i+1, name, req.JID, req.RequestedAt.Format("2006-01-02T15:04:05Z07:00")))
+	}
+
+	if total > previewCount {
+		lines = append(lines, fmt.Sprintf("...and %d more requests.", total-previewCount))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildParticipantStatusFallback(groupID, action string, participants []string, results []domainGroup.ParticipantStatus) string {
+	const maxPreview = 20
+
+	successCount, errorCount := summarizeParticipantStatuses(results)
+	lines := make([]string, 0, maxPreview+3)
+	lines = append(lines, fmt.Sprintf(
+		"Action %q applied to group %s\nrequested=%d success=%d error=%d",
+		action,
+		groupID,
+		len(participants),
+		successCount,
+		errorCount,
+	))
+
+	if len(results) == 0 {
+		lines = append(lines, "No participant status details returned.")
+		return strings.Join(lines, "\n")
+	}
+
+	previewCount := len(results)
+	if previewCount > maxPreview {
+		previewCount = maxPreview
+	}
+
+	for i := 0; i < previewCount; i++ {
+		status := results[i]
+		lines = append(lines, fmt.Sprintf("%d. %s | status=%s | %s", i+1, status.Participant, status.Status, status.Message))
+	}
+
+	if len(results) > previewCount {
+		lines = append(lines, fmt.Sprintf("...and %d more results.", len(results)-previewCount))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func summarizeParticipantStatuses(results []domainGroup.ParticipantStatus) (successCount, errorCount int) {
+	for _, status := range results {
+		switch strings.ToLower(strings.TrimSpace(status.Status)) {
+		case "success":
+			successCount++
+		case "error", "failed", "failure":
+			errorCount++
+		default:
+			if strings.Contains(strings.ToLower(status.Message), "fail") || strings.Contains(strings.ToLower(status.Message), "error") {
+				errorCount++
+			} else {
+				successCount++
+			}
+		}
+	}
+	return successCount, errorCount
+}
+
+func buildGroupInfoResultPayload(groupID string, resp domainGroup.GroupInfoResponse) map[string]any {
+	result := map[string]any{
+		"group": map[string]any{
+			"jid": groupID,
+		},
+		"raw": resp.Data,
+	}
+
+	if resp.Data == nil {
+		return result
+	}
+
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		return result
+	}
+
+	var details map[string]any
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return result
+	}
+
+	group := result["group"].(map[string]any)
+	if name := pickString(details, "Name", "name", "Subject", "subject"); name != "" {
+		group["name"] = name
+	}
+	if jid := pickString(details, "JID", "jid", "ID", "id"); jid != "" {
+		group["jid"] = jid
+	}
+	if topic := pickString(details, "Topic", "topic", "Description", "description"); topic != "" {
+		group["topic"] = topic
+	}
+	if participantsCount := pickArrayLen(details, "Participants", "participants"); participantsCount >= 0 {
+		group["participants_count"] = participantsCount
+	}
+
+	return result
+}
+
+func buildGroupInfoFallback(groupID string, resp domainGroup.GroupInfoResponse) string {
+	lines := []string{fmt.Sprintf("Group info\ngroup_id: %s", groupID)}
+
+	if resp.Data == nil {
+		lines = append(lines, "details: (empty)")
+		return strings.Join(lines, "\n")
+	}
+
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("details: %v", resp.Data))
+		return strings.Join(lines, "\n")
+	}
+
+	var details map[string]any
+	if err := json.Unmarshal(raw, &details); err == nil {
+		if name := pickString(details, "Name", "name", "Subject", "subject"); name != "" {
+			lines = append(lines, "name: "+name)
+		}
+		if jid := pickString(details, "JID", "jid", "ID", "id"); jid != "" {
+			lines = append(lines, "jid: "+jid)
+		}
+		if topic := pickString(details, "Topic", "topic", "Description", "description"); topic != "" {
+			lines = append(lines, "topic: "+topic)
+		}
+
+		if participantsCount := pickArrayLen(details, "Participants", "participants"); participantsCount >= 0 {
+			lines = append(lines, fmt.Sprintf("participants_count: %d", participantsCount))
+		}
+	}
+
+	lines = append(lines, "details_json: "+truncateGroupFallback(string(raw), 700))
+	return strings.Join(lines, "\n")
+}
+
+func pickString(data map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := data[key]
+		if !ok {
+			continue
+		}
+
+		switch typed := value.(type) {
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if trimmed != "" {
+				return trimmed
+			}
+		default:
+			rendered := strings.TrimSpace(fmt.Sprintf("%v", typed))
+			if rendered != "" && rendered != "<nil>" {
+				return rendered
+			}
+		}
+	}
+	return ""
+}
+
+func pickArrayLen(data map[string]any, keys ...string) int {
+	for _, key := range keys {
+		value, ok := data[key]
+		if !ok {
+			continue
+		}
+
+		switch typed := value.(type) {
+		case []any:
+			return len(typed)
+		case []string:
+			return len(typed)
+		}
+	}
+	return -1
+}
+
+func truncateGroupFallback(text string, max int) string {
+	trimmed := strings.TrimSpace(text)
+	if max <= 0 {
+		return ""
+	}
+
+	runes := []rune(trimmed)
+	if len(runes) <= max {
+		return trimmed
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }

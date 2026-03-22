@@ -7,20 +7,22 @@ import (
 	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	domainDevice "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/device"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 // DeviceInstance bundles a WhatsApp client with device metadata and scoped storage.
 type DeviceInstance struct {
-	mu              sync.RWMutex
-	id              string
-	client          *whatsmeow.Client
-	chatStorageRepo domainChatStorage.IChatStorageRepository
-	state           domainDevice.DeviceState
-	displayName     string
-	phoneNumber     string
-	jid             string
-	createdAt       time.Time
-	onLoggedOut     func(deviceID string) // Callback for remote logout cleanup
+	mu                sync.RWMutex
+	id                string
+	client            *whatsmeow.Client
+	chatStorageRepo   domainChatStorage.IChatStorageRepository
+	state             domainDevice.DeviceState
+	displayName       string
+	phoneNumber       string
+	jid               string
+	createdAt         time.Time
+	onLoggedOut       func(deviceID string) // Callback for remote logout cleanup
+	pendingMediaRetry map[string]chan *events.MediaRetry
 }
 
 func NewDeviceInstance(deviceID string, client *whatsmeow.Client, chatStorageRepo domainChatStorage.IChatStorageRepository) *DeviceInstance {
