@@ -50,14 +50,25 @@ func (h *AppHandler) handleConnectionStatus(_ context.Context, _ mcp.CallToolReq
 		return nil, err
 	}
 
-	structured := map[string]any{
-		"is_connected": isConnected,
-		"is_logged_in": isLoggedIn,
-		"device_id":    deviceID,
+	resultPayload := map[string]any{
+		"device": map[string]any{
+			"id": deviceID,
+		},
+		"connection": map[string]any{
+			"is_connected": isConnected,
+			"is_logged_in": isLoggedIn,
+		},
 	}
-
-	fallback := fmt.Sprintf("connected=%t logged_in=%t", isConnected, isLoggedIn)
-	return mcp.NewToolResultStructured(structured, fallback), nil
+	requestPayload := map[string]any{
+		"device_id": deviceID,
+	}
+	fallback := fmt.Sprintf(
+		"Connection status\ndevice_id: %s\nis_connected: %t\nis_logged_in: %t",
+		deviceID,
+		isConnected,
+		isLoggedIn,
+	)
+	return newStandardToolResult("whatsapp_connection_status", "success", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *AppHandler) toolLoginWithQR() mcp.Tool {
@@ -82,22 +93,36 @@ func (h *AppHandler) handleLoginWithQR(ctx context.Context, _ mcp.CallToolReques
 		return nil, err
 	}
 
-	fallback := fmt.Sprintf("Scan the QR image to log in (expires in ~%d seconds)", int(resp.Duration.Seconds()))
-	structured := map[string]any{
-		"device_id":     deviceID,
-		"qr_image_path": resp.ImagePath,
-		"qr_code":       resp.Code,
-		"expires_in":    int(resp.Duration.Seconds()),
+	fallback := fmt.Sprintf(
+		"QR login initiated\ndevice_id: %s\nexpires_in: %d\nqr_code: %s\nqr_image_path: %s",
+		deviceID,
+		int(resp.Duration.Seconds()),
+		resp.Code,
+		resp.ImagePath,
+	)
+	resultPayload := map[string]any{
+		"device": map[string]any{
+			"id": deviceID,
+		},
+		"login": map[string]any{
+			"method":             "qr",
+			"qr_code":            resp.Code,
+			"qr_image_path":      resp.ImagePath,
+			"expires_in_seconds": int(resp.Duration.Seconds()),
+		},
+	}
+	requestPayload := map[string]any{
+		"device_id": deviceID,
 	}
 
 	qrBytes, readErr := os.ReadFile(resp.ImagePath)
 	if readErr != nil {
-		return mcp.NewToolResultStructured(structured, fallback), nil
+		return newStandardToolResult("whatsapp_login_qr", "generated", requestPayload, resultPayload, fallback), nil
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(qrBytes)
 	result := mcp.NewToolResultImage(fallback, encoded, "image/png")
-	result.StructuredContent = structured
+	result.StructuredContent = newStandardStructuredContent("whatsapp_login_qr", "generated", requestPayload, resultPayload, fallback)
 	return result, nil
 }
 
@@ -133,14 +158,27 @@ func (h *AppHandler) handleLoginWithCode(ctx context.Context, request mcp.CallTo
 		return nil, err
 	}
 
-	structured := map[string]any{
+	resultPayload := map[string]any{
+		"device": map[string]any{
+			"id": deviceID,
+		},
+		"login": map[string]any{
+			"method":    "pair_code",
+			"phone":     trimmedPhone,
+			"pair_code": pairCode,
+		},
+	}
+	requestPayload := map[string]any{
 		"device_id": deviceID,
 		"phone":     trimmedPhone,
-		"pair_code": pairCode,
 	}
-
-	fallback := fmt.Sprintf("Pair code %s generated for %s", pairCode, trimmedPhone)
-	return mcp.NewToolResultStructured(structured, fallback), nil
+	fallback := fmt.Sprintf(
+		"Pairing code generated\ndevice_id: %s\nphone: %s\npair_code: %s",
+		deviceID,
+		trimmedPhone,
+		pairCode,
+	)
+	return newStandardToolResult("whatsapp_login_with_code", "generated", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *AppHandler) toolLogout() mcp.Tool {
@@ -164,7 +202,17 @@ func (h *AppHandler) handleLogout(ctx context.Context, _ mcp.CallToolRequest) (*
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Logged out device %s successfully", deviceID)), nil
+	resultPayload := map[string]any{
+		"device": map[string]any{
+			"id": deviceID,
+		},
+		"operation": "logout",
+	}
+	requestPayload := map[string]any{
+		"device_id": deviceID,
+	}
+	fallback := fmt.Sprintf("Logout completed\ndevice_id: %s", deviceID)
+	return newStandardToolResult("whatsapp_logout", "success", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *AppHandler) toolReconnect() mcp.Tool {
@@ -188,7 +236,17 @@ func (h *AppHandler) handleReconnect(ctx context.Context, _ mcp.CallToolRequest)
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Reconnect initiated for %s", deviceID)), nil
+	resultPayload := map[string]any{
+		"device": map[string]any{
+			"id": deviceID,
+		},
+		"operation": "reconnect",
+	}
+	requestPayload := map[string]any{
+		"device_id": deviceID,
+	}
+	fallback := fmt.Sprintf("Reconnect initiated\ndevice_id: %s", deviceID)
+	return newStandardToolResult("whatsapp_reconnect", "initiated", requestPayload, resultPayload, fallback), nil
 }
 
 func (h *AppHandler) defaultDeviceID() (string, error) {

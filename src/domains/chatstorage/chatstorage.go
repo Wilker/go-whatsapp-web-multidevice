@@ -26,6 +26,7 @@ type Message struct {
 	MediaType     string    `db:"media_type"`
 	Filename      string    `db:"filename"`
 	URL           string    `db:"url"`
+	DirectPath    string    `db:"direct_path"`
 	MediaKey      []byte    `db:"media_key"`
 	FileSHA256    []byte    `db:"file_sha256"`
 	FileEncSHA256 []byte    `db:"file_enc_sha256"`
@@ -41,6 +42,7 @@ type MediaInfo struct {
 	MediaType     string
 	Filename      string
 	URL           string
+	DirectPath    string
 	MediaKey      []byte
 	FileSHA256    []byte
 	FileEncSHA256 []byte

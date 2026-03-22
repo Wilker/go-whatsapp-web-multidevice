@@ -330,6 +330,10 @@ protocol. Below is the complete list of available tools:
 - `whatsapp_list_contacts` - Retrieve all contacts in your WhatsApp account
 - `whatsapp_list_chats` - Get recent chats with pagination and search filters
 - `whatsapp_get_chat_messages` - Fetch messages from specific chats with time/media filtering
+- `whatsapp_export_chat` - Generate a local export bundle with mandatory human TXT, correlated JSON/Markdown manifests, flexible date/message filters, optional media ZIP packaging, and aggressive media recovery for files still retrievable via WhatsApp Web
+- `whatsapp_export_chat_async_start` - Start a background export job for long-running full exports with media and return a `job_id` immediately
+- `whatsapp_export_chat_async_status` - Check the current state, progress counters, and known output paths of an async export job
+- `whatsapp_export_chat_async_result` - Fetch the final export payload after an async export job completes
 - `whatsapp_download_message_media` - Download images/videos from messages
 - `whatsapp_archive_chat` - Archive or unarchive a chat conversation
 
@@ -348,6 +352,103 @@ protocol. Below is the complete list of available tools:
 - `whatsapp_group_set_announce` - Toggle announcement-only mode
 - `whatsapp_group_join_requests` - List pending join requests
 - `whatsapp_group_manage_join_requests` - Approve or reject join requests
+
+#### MCP Response Contract (LLM-Friendly)
+
+All MCP tools now return a standardized envelope in `structuredContent`:
+
+```json
+{
+  "action": "whatsapp_*",
+  "status": "success|generated|initiated|error",
+  "summary": "Human-readable summary",
+  "request": {},
+  "result": {}
+}
+```
+
+Notes:
+- `summary` is also returned as the text fallback for clients that prioritize text output.
+- `request` contains normalized input values used by the tool.
+- `result` contains normalized, LLM-friendly fields.
+
+##### Result Shape by Tool Category
+
+**Connection tools**
+- `result.device.id`
+- `result.connection` for `whatsapp_connection_status`
+- `result.login` for QR/pair-code flows
+
+**Send tools**
+- Common fields:
+  - `result.message_id`
+  - `result.recipient.id`
+  - `result.is_forwarded`
+- Message-specific payload (one of):
+  - `result.text`
+  - `result.contact`
+  - `result.link`
+  - `result.location`
+  - `result.image`
+  - `result.sticker`
+
+**Query tools**
+- List/read tools return:
+  - `result.items` (array)
+  - `result.count` (number)
+  - `result.pagination` when applicable
+- Normalized objects include:
+  - contacts: `jid`, `name`
+  - chats: `jid`, `name`, `archived`, `last_message_time`
+  - messages: `message_id`, `chat_jid`, `sender_jid`, `timestamp`, `content`
+- Media download:
+  - `result.message_id`
+  - `result.chat.jid`
+  - `result.media.type|filename|path|size_bytes`
+
+**Group tools**
+- Common group identity:
+  - `result.group.jid`
+  - `result.group.name` when available
+- List tools:
+  - `result.items`
+  - `result.count`
+- Manage tools:
+  - `result.items` with participant status entries (`jid`, `status`, `message`)
+  - `result.success_count`
+  - `result.error_count`
+
+##### Example: `whatsapp_list_chats`
+
+```json
+{
+  "action": "whatsapp_list_chats",
+  "status": "success",
+  "summary": "Found 2 chats in this page (offset 0, limit 25, total 2): ...",
+  "request": {
+    "limit": 25,
+    "offset": 0,
+    "search": "",
+    "has_media": false
+  },
+  "result": {
+    "items": [
+      {
+        "jid": "628123456789@s.whatsapp.net",
+        "name": "Alice",
+        "archived": false,
+        "last_message_time": "2026-03-09T15:04:05Z"
+      }
+    ],
+    "count": 1,
+    "pagination": {
+      "limit": 25,
+      "offset": 0,
+      "total": 2
+    }
+  }
+}
+```
 
 #### MCP Endpoints
 

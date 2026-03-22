@@ -45,6 +45,8 @@ func handler(ctx context.Context, instance *DeviceInstance, rawEvt any) {
 		handleStreamReplaced(ctx)
 	case *events.Message:
 		handleMessage(ctx, evt, chatStorageRepo, client)
+	case *events.MediaRetry:
+		handleMediaRetry(ctx, evt, instance)
 	case *events.Receipt:
 		handleReceipt(ctx, evt, instance.JID(), client)
 	case *events.Archive:
@@ -210,6 +212,16 @@ func handleConnectionEvents(_ context.Context, client *whatsmeow.Client, instanc
 
 func handleStreamReplaced(_ context.Context) {
 	os.Exit(0)
+}
+
+func handleMediaRetry(_ context.Context, evt *events.MediaRetry, instance *DeviceInstance) {
+	if instance == nil || evt == nil {
+		return
+	}
+
+	if !instance.DeliverPendingMediaRetry(evt) {
+		logrus.Debugf("Ignoring unsolicited media retry notification for message %s", evt.MessageID)
+	}
 }
 
 func handleReceipt(ctx context.Context, evt *events.Receipt, deviceID string, client *whatsmeow.Client) {

@@ -245,16 +245,16 @@ func ExtractMessageTextFromEvent(evt *events.Message) string {
 }
 
 // ExtractMediaInfo extracts media information from a WhatsApp message
-func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, url string, mediaKey []byte, fileSHA256 []byte, fileEncSHA256 []byte, fileLength uint64) {
+func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, url string, directPath string, mediaKey []byte, fileSHA256 []byte, fileEncSHA256 []byte, fileLength uint64) {
 	if msg == nil {
-		return "", "", "", nil, nil, nil, 0
+		return "", "", "", "", nil, nil, nil, 0
 	}
 
 	// Check for image message
 	if img := msg.GetImageMessage(); img != nil {
 		filename = GenerateMediaFilename("image", "jpg", img.GetCaption())
 		return "image", filename,
-			img.GetURL(), img.GetMediaKey(), img.GetFileSHA256(),
+			img.GetURL(), img.GetDirectPath(), img.GetMediaKey(), img.GetFileSHA256(),
 			img.GetFileEncSHA256(), img.GetFileLength()
 	}
 
@@ -262,7 +262,7 @@ func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, ur
 	if vid := msg.GetVideoMessage(); vid != nil {
 		filename = GenerateMediaFilename("video", "mp4", vid.GetCaption())
 		return "video", filename,
-			vid.GetURL(), vid.GetMediaKey(), vid.GetFileSHA256(),
+			vid.GetURL(), vid.GetDirectPath(), vid.GetMediaKey(), vid.GetFileSHA256(),
 			vid.GetFileEncSHA256(), vid.GetFileLength()
 	}
 
@@ -270,7 +270,7 @@ func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, ur
 	if ptv := msg.GetPtvMessage(); ptv != nil {
 		filename = GenerateMediaFilename("video_note", "mp4", ptv.GetCaption())
 		return "video_note", filename,
-			ptv.GetURL(), ptv.GetMediaKey(), ptv.GetFileSHA256(),
+			ptv.GetURL(), ptv.GetDirectPath(), ptv.GetMediaKey(), ptv.GetFileSHA256(),
 			ptv.GetFileEncSHA256(), ptv.GetFileLength()
 	}
 
@@ -282,7 +282,7 @@ func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, ur
 		}
 		filename = GenerateMediaFilename("audio", extension, "")
 		return "audio", filename,
-			aud.GetURL(), aud.GetMediaKey(), aud.GetFileSHA256(),
+			aud.GetURL(), aud.GetDirectPath(), aud.GetMediaKey(), aud.GetFileSHA256(),
 			aud.GetFileEncSHA256(), aud.GetFileLength()
 	}
 
@@ -293,7 +293,7 @@ func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, ur
 			filename = GenerateMediaFilename("document", "", doc.GetTitle())
 		}
 		return "document", filename,
-			doc.GetURL(), doc.GetMediaKey(), doc.GetFileSHA256(),
+			doc.GetURL(), doc.GetDirectPath(), doc.GetMediaKey(), doc.GetFileSHA256(),
 			doc.GetFileEncSHA256(), doc.GetFileLength()
 	}
 
@@ -301,11 +301,11 @@ func ExtractMediaInfo(msg *waE2E.Message) (mediaType string, filename string, ur
 	if sticker := msg.GetStickerMessage(); sticker != nil {
 		filename = GenerateMediaFilename("sticker", "webp", "")
 		return "sticker", filename,
-			sticker.GetURL(), sticker.GetMediaKey(), sticker.GetFileSHA256(),
+			sticker.GetURL(), sticker.GetDirectPath(), sticker.GetMediaKey(), sticker.GetFileSHA256(),
 			sticker.GetFileEncSHA256(), sticker.GetFileLength()
 	}
 
-	return "", "", "", nil, nil, nil, 0
+	return "", "", "", "", nil, nil, nil, 0
 }
 
 // ExtractEphemeralExpiration extracts ephemeral expiration from a WhatsApp message
