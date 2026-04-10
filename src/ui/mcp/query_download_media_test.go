@@ -23,6 +23,7 @@ func TestHandleDownloadMediaAcceptsOutputDirAndReturnsResolvedPath(t *testing.T)
 			FilePath:       "/Users/wilker/Downloads/whatsapp/5511999999999/2026-03-10/relatorio.pdf",
 			FileSize:       1234,
 			OutputDirUsed:  "/Users/wilker/Downloads/whatsapp",
+			PathModeUsed:   domainMessage.MediaDownloadPathModeExact,
 			RecoveryMethod: domainMessage.MediaRecoveryMethodDirectURL,
 		},
 	}
@@ -34,6 +35,7 @@ func TestHandleDownloadMediaAcceptsOutputDirAndReturnsResolvedPath(t *testing.T)
 				"message_id": "msg-123",
 				"phone":      "5511999999999",
 				"output_dir": "~/Downloads/whatsapp",
+				"path_mode":  domainMessage.MediaDownloadPathModeExact,
 			},
 		},
 	})
@@ -45,6 +47,9 @@ func TestHandleDownloadMediaAcceptsOutputDirAndReturnsResolvedPath(t *testing.T)
 	}
 	if messageService.lastDownloadRequest.OutputDir != "~/Downloads/whatsapp" {
 		t.Fatalf("expected output_dir to be forwarded, got %q", messageService.lastDownloadRequest.OutputDir)
+	}
+	if messageService.lastDownloadRequest.PathMode != domainMessage.MediaDownloadPathModeExact {
+		t.Fatalf("expected path_mode to be forwarded, got %q", messageService.lastDownloadRequest.PathMode)
 	}
 
 	structured, ok := result.StructuredContent.(map[string]any)
@@ -61,5 +66,8 @@ func TestHandleDownloadMediaAcceptsOutputDirAndReturnsResolvedPath(t *testing.T)
 	}
 	if media["output_dir_used"] != "/Users/wilker/Downloads/whatsapp" {
 		t.Fatalf("expected output_dir_used in media payload, got %#v", media["output_dir_used"])
+	}
+	if media["path_mode_used"] != domainMessage.MediaDownloadPathModeExact {
+		t.Fatalf("expected path_mode_used in media payload, got %#v", media["path_mode_used"])
 	}
 }

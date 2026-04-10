@@ -672,6 +672,9 @@ func (h *QueryHandler) toolDownloadMedia() mcp.Tool {
 		mcp.WithString("output_dir",
 			mcp.Description("Optional base directory where the downloaded media should be stored. Supports ~/ paths."),
 		),
+		mcp.WithString("path_mode",
+			mcp.Description("How output_dir is interpreted: 'base' keeps the current {jid}/{date}/ layout, while 'exact' writes directly into output_dir."),
+		),
 	)
 }
 
@@ -697,6 +700,7 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 		MessageID: messageID,
 		Phone:     phone,
 		OutputDir: strings.TrimSpace(request.GetString("output_dir", "")),
+		PathMode:  strings.TrimSpace(request.GetString("path_mode", "")),
 	}
 
 	resp, err := h.messageService.DownloadMedia(ctx, req)
@@ -705,19 +709,21 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 	}
 
 	fallback := fmt.Sprintf(
-		"Downloaded media\nmessage_id: %s\nchat: %s\nmedia_type: %s\nfilename: %s\nfile_path: %s\noutput_dir_used: %s\nfile_size: %d\nrecovery_method: %s",
+		"Downloaded media\nmessage_id: %s\nchat: %s\nmedia_type: %s\nfilename: %s\nfile_path: %s\noutput_dir_used: %s\npath_mode_used: %s\nfile_size: %d\nrecovery_method: %s",
 		resp.MessageID,
 		phone,
 		resp.MediaType,
 		resp.Filename,
 		resp.FilePath,
 		resp.OutputDirUsed,
+		resp.PathModeUsed,
 		resp.FileSize,
 		resp.RecoveryMethod,
 	)
 	resultPayload := map[string]any{
 		"message_id":      resp.MessageID,
 		"output_dir_used": resp.OutputDirUsed,
+		"path_mode_used":  resp.PathModeUsed,
 		"chat": map[string]any{
 			"jid": phone,
 		},
@@ -727,6 +733,7 @@ func (h *QueryHandler) handleDownloadMedia(ctx context.Context, request mcp.Call
 			"path":            resp.FilePath,
 			"size_bytes":      resp.FileSize,
 			"output_dir_used": resp.OutputDirUsed,
+			"path_mode_used":  resp.PathModeUsed,
 			"recovery_method": resp.RecoveryMethod,
 			"failure_reason":  resp.FailureReason,
 		},

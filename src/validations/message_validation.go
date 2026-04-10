@@ -94,6 +94,7 @@ func ValidateDownloadMedia(ctx context.Context, request domainMessage.DownloadMe
 	err := validation.ValidateStructWithContext(ctx, &request,
 		validation.Field(&request.Phone, validation.Required),
 		validation.Field(&request.MessageID, validation.Required),
+		validation.Field(&request.PathMode, validation.In("", domainMessage.MediaDownloadPathModeBase, domainMessage.MediaDownloadPathModeExact)),
 	)
 
 	if err != nil {

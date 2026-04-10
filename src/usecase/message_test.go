@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -215,13 +216,16 @@ func TestResolveMediaDownloadDirUsesDefaultPathMedia(t *testing.T) {
 		Timestamp: time.Date(2026, 3, 10, 11, 14, 0, 0, time.UTC),
 	}
 
-	baseDir, dateDir, err := resolveMediaDownloadDir("", message)
+	baseDir, dateDir, pathModeUsed, err := resolveMediaDownloadDir("", "", message)
 	if err != nil {
 		t.Fatalf("resolveMediaDownloadDir() unexpected error: %v", err)
 	}
 
 	if baseDir != filepath.Clean("statics/media") {
 		t.Fatalf("expected default media base dir, got %q", baseDir)
+	}
+	if pathModeUsed != domainMessage.MediaDownloadPathModeBase {
+		t.Fatalf("expected path mode %q, got %q", domainMessage.MediaDownloadPathModeBase, pathModeUsed)
 	}
 	expectedDateDir := filepath.Join("statics/media", "120363424157959439", "2026-03-10")
 	if dateDir != expectedDateDir {
@@ -237,7 +241,7 @@ func TestResolveMediaDownloadDirExpandsCustomOutputDir(t *testing.T) {
 		Timestamp: time.Date(2026, 3, 10, 11, 14, 0, 0, time.UTC),
 	}
 
-	baseDir, dateDir, err := resolveMediaDownloadDir("~/Downloads/whatsapp", message)
+	baseDir, dateDir, pathModeUsed, err := resolveMediaDownloadDir("~/Downloads/whatsapp", "", message)
 	if err != nil {
 		t.Fatalf("resolveMediaDownloadDir() unexpected error: %v", err)
 	}
@@ -246,8 +250,77 @@ func TestResolveMediaDownloadDirExpandsCustomOutputDir(t *testing.T) {
 	if baseDir != expectedBaseDir {
 		t.Fatalf("expected expanded base dir %q, got %q", expectedBaseDir, baseDir)
 	}
+	if pathModeUsed != domainMessage.MediaDownloadPathModeBase {
+		t.Fatalf("expected path mode %q, got %q", domainMessage.MediaDownloadPathModeBase, pathModeUsed)
+	}
 	expectedDateDir := filepath.Join(expectedBaseDir, "5511999999999", "2026-03-10")
 	if dateDir != expectedDateDir {
 		t.Fatalf("expected date dir %q, got %q", expectedDateDir, dateDir)
+	}
+}
+
+func TestResolveMediaDownloadDirUsesExactPathMode(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	message := &domainChatStorage.Message{
+		ChatJID:   "5511999999999@s.whatsapp.net",
+		Timestamp: time.Date(2026, 3, 10, 11, 14, 0, 0, time.UTC),
+	}
+
+	baseDir, downloadDir, pathModeUsed, err := resolveMediaDownloadDir("~/Downloads/whatsapp", domainMessage.MediaDownloadPathModeExact, message)
+	if err != nil {
+		t.Fatalf("resolveMediaDownloadDir() unexpected error: %v", err)
+	}
+
+	expectedBaseDir := filepath.Join(homeDir, "Downloads", "whatsapp")
+	if baseDir != expectedBaseDir {
+		t.Fatalf("expected exact base dir %q, got %q", expectedBaseDir, baseDir)
+	}
+	if downloadDir != expectedBaseDir {
+		t.Fatalf("expected exact download dir %q, got %q", expectedBaseDir, downloadDir)
+	}
+	if pathModeUsed != domainMessage.MediaDownloadPathModeExact {
+		t.Fatalf("expected path mode %q, got %q", domainMessage.MediaDownloadPathModeExact, pathModeUsed)
+	}
+}
+
+func TestEnsureDownloadedMediaExtensionUsesStoredFilenameExtension(t *testing.T) {
+	originalPath := filepath.Join(t.TempDir(), "downloaded-media")
+	if err := os.WriteFile(originalPath, []byte("audio"), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	updatedPath, err := ensureDownloadedMediaExtension(originalPath, &domainChatStorage.Message{
+		MediaType: "audio",
+		Filename:  "audio_20260309_192823.ogg",
+	})
+	if err != nil {
+		t.Fatalf("ensureDownloadedMediaExtension() unexpected error: %v", err)
+	}
+	if updatedPath != originalPath+".ogg" {
+		t.Fatalf("expected updated path %q, got %q", originalPath+".ogg", updatedPath)
+	}
+	if _, err := os.Stat(updatedPath); err != nil {
+		t.Fatalf("Stat(%s) unexpected error: %v", updatedPath, err)
+	}
+}
+
+func TestEnsureDownloadedMediaExtensionFallsBackToMediaType(t *testing.T) {
+	originalPath := filepath.Join(t.TempDir(), "downloaded-media")
+	if err := os.WriteFile(originalPath, []byte("audio"), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	updatedPath, err := ensureDownloadedMediaExtension(originalPath, &domainChatStorage.Message{
+		MediaType: "audio",
+	})
+	if err != nil {
+		t.Fatalf("ensureDownloadedMediaExtension() unexpected error: %v", err)
+	}
+	if updatedPath != originalPath+".ogg" {
+		t.Fatalf("expected updated path %q, got %q", originalPath+".ogg", updatedPath)
+	}
+	if _, err := os.Stat(updatedPath); err != nil {
+		t.Fatalf("Stat(%s) unexpected error: %v", updatedPath, err)
 	}
 }

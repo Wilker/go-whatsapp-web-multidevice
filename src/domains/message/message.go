@@ -42,6 +42,7 @@ type DownloadMediaRequest struct {
 	MessageID string `json:"message_id" uri:"message_id"`
 	Phone     string `json:"phone" form:"phone"`
 	OutputDir string `json:"output_dir" form:"output_dir"`
+	PathMode  string `json:"path_mode" form:"path_mode"`
 }
 
 type RecoverMediaBatchRequest struct {
@@ -68,6 +69,11 @@ const (
 )
 
 const (
+	MediaDownloadPathModeBase  = "base"
+	MediaDownloadPathModeExact = "exact"
+)
+
+const (
 	MediaFailureReasonNone                = ""
 	MediaFailureReasonNoMediaMetadata     = "no_media_metadata"
 	MediaFailureReasonRetryTimeout        = "retry_timeout"
@@ -83,6 +89,7 @@ type DownloadMediaResponse struct {
 	FilePath       string `json:"file_path"`
 	FileSize       int64  `json:"file_size"`
 	OutputDirUsed  string `json:"output_dir_used,omitempty"`
+	PathModeUsed   string `json:"path_mode_used,omitempty"`
 	RecoveryMethod string `json:"recovery_method,omitempty"`
 	FailureReason  string `json:"failure_reason,omitempty"`
 }

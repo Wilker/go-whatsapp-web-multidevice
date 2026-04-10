@@ -332,18 +332,19 @@ func (service serviceMessage) downloadMediaWithProfile(
 		return response, fmt.Errorf("message %s does not belong to chat %s", request.MessageID, dataWaRecipient.String())
 	}
 
-	baseDir, dateDir, err := resolveMediaDownloadDir(request.OutputDir, message)
+	baseDir, downloadDir, pathModeUsed, err := resolveMediaDownloadDir(request.OutputDir, request.PathMode, message)
 	if err != nil {
 		return response, err
 	}
 	response.OutputDirUsed = baseDir
+	response.PathModeUsed = pathModeUsed
 
-	err = os.MkdirAll(dateDir, 0755)
+	err = os.MkdirAll(downloadDir, 0755)
 	if err != nil {
 		return response, fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	downloadResult, err := service.downloadMessageMediaWithRecovery(ctx, client, message, dateDir, profile)
+	downloadResult, err := service.downloadMessageMediaWithRecovery(ctx, client, message, downloadDir, profile)
 	if err != nil {
 		response.RecoveryMethod = downloadResult.recoveryMethod
 		response.FailureReason = downloadResult.failureReason
@@ -373,6 +374,7 @@ func (service serviceMessage) downloadMediaWithProfile(
 	response.Filename = filepath.Base(downloadResult.extractedMedia.MediaPath)
 	response.FilePath = downloadResult.extractedMedia.MediaPath
 	response.OutputDirUsed = baseDir
+	response.PathModeUsed = pathModeUsed
 	response.RecoveryMethod = downloadResult.recoveryMethod
 	response.FailureReason = domainMessage.MediaFailureReasonNone
 	if fileInfo != nil {
@@ -750,7 +752,17 @@ func downloadStoredMessageMedia(
 		return utils.ExtractedMedia{}, err
 	}
 
-	return utils.ExtractMedia(ctx, client, storageLocation, downloadableMsg)
+	extractedMedia, err := utils.ExtractMedia(ctx, client, storageLocation, downloadableMsg)
+	if err != nil {
+		return utils.ExtractedMedia{}, err
+	}
+
+	extractedMedia.MediaPath, err = ensureDownloadedMediaExtension(extractedMedia.MediaPath, message)
+	if err != nil {
+		return utils.ExtractedMedia{}, err
+	}
+
+	return extractedMedia, nil
 }
 
 func buildStoredDownloadableMessage(message *domainChatStorage.Message, url string, directPath string) (whatsmeow.DownloadableMessage, error) {
@@ -843,6 +855,49 @@ func buildStoredMediaRetryMessageInfo(ctx context.Context, client *whatsmeow.Cli
 	}, nil
 }
 
+func ensureDownloadedMediaExtension(path string, message *domainChatStorage.Message) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return path, nil
+	}
+	if ext := filepath.Ext(path); ext != "" && ext != "." {
+		return path, nil
+	}
+
+	extension := filepath.Ext(strings.TrimSpace(message.Filename))
+	if extension == "." {
+		extension = ""
+	}
+	if extension == "" {
+		extension = defaultDownloadedMediaExtension(message.MediaType)
+	}
+	if extension == "" {
+		return path, nil
+	}
+
+	updatedPath := path + extension
+	if err := os.Rename(path, updatedPath); err != nil {
+		return "", fmt.Errorf("failed to add extension %s to downloaded media %s: %w", extension, path, err)
+	}
+	return updatedPath, nil
+}
+
+func defaultDownloadedMediaExtension(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image":
+		return ".jpg"
+	case "video", "video_note":
+		return ".mp4"
+	case "audio", "ptt":
+		return ".ogg"
+	case "document":
+		return ".bin"
+	case "sticker":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
 func hasDownloadableMediaMetadata(message *domainChatStorage.Message) bool {
 	if message == nil {
 		return false
@@ -868,15 +923,27 @@ func hasStoredDirectPath(message *domainChatStorage.Message) bool {
 	return strings.TrimSpace(message.DirectPath) != ""
 }
 
-func resolveMediaDownloadDir(outputDir string, message *domainChatStorage.Message) (baseDir string, dateDir string, err error) {
+func resolveMediaDownloadDir(outputDir string, pathMode string, message *domainChatStorage.Message) (baseDir string, downloadDir string, pathModeUsed string, err error) {
 	baseDir, err = utils.ResolveBaseOutputDir(outputDir, config.PathMedia)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
+	}
+
+	pathModeUsed = normalizeMediaDownloadPathMode(pathMode)
+	if pathModeUsed == domainMessage.MediaDownloadPathModeExact {
+		return baseDir, baseDir, pathModeUsed, nil
 	}
 
 	chatDir := filepath.Join(baseDir, utils.ExtractPhoneNumber(message.ChatJID))
-	dateDir = filepath.Join(chatDir, message.Timestamp.Format("2006-01-02"))
-	return baseDir, dateDir, nil
+	downloadDir = filepath.Join(chatDir, message.Timestamp.Format("2006-01-02"))
+	return baseDir, downloadDir, pathModeUsed, nil
+}
+
+func normalizeMediaDownloadPathMode(pathMode string) string {
+	if strings.EqualFold(strings.TrimSpace(pathMode), domainMessage.MediaDownloadPathModeExact) {
+		return domainMessage.MediaDownloadPathModeExact
+	}
+	return domainMessage.MediaDownloadPathModeBase
 }
 
 func (service serviceMessage) getStoredMessageForRequest(ctx context.Context, messageID string) (*domainChatStorage.Message, error) {
