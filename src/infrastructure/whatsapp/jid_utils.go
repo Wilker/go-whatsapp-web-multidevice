@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"context"
+	"strings"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -36,4 +37,19 @@ func NormalizeJIDFromLID(ctx context.Context, jid types.JID, client *whatsmeow.C
 
 	// Fallback to original JID
 	return jid
+}
+
+// NormalizeParticipantStringFromLID normalizes a participant JID string for storage/export usage.
+func NormalizeParticipantStringFromLID(ctx context.Context, participant string, client *whatsmeow.Client) string {
+	trimmed := strings.TrimSpace(participant)
+	if trimmed == "" {
+		return ""
+	}
+
+	jid, err := types.ParseJID(trimmed)
+	if err != nil {
+		return trimmed
+	}
+
+	return NormalizeJIDFromLID(ctx, jid, client).ToNonAD().String()
 }

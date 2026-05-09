@@ -92,6 +92,9 @@ func TestScanMessageAcceptsNullOptionalTextColumns(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
+		nil,
 		[]byte{1, 2, 3},
 		[]byte{4, 5, 6},
 		[]byte{7, 8, 9},
@@ -103,7 +106,8 @@ func TestScanMessageAcceptsNullOptionalTextColumns(t *testing.T) {
 		t.Fatalf("scanMessage() unexpected error: %v", err)
 	}
 
-	if message.Content != "" || message.MediaType != "" || message.Filename != "" || message.URL != "" || message.DirectPath != "" {
+	if message.Content != "" || message.MediaType != "" || message.Filename != "" || message.URL != "" || message.DirectPath != "" ||
+		message.ReplyToMessageID != "" || message.QuotedText != "" || message.QuotedSender != "" {
 		t.Fatalf("expected nullable text fields to be normalized to empty strings, got %+v", message)
 	}
 }
@@ -159,13 +163,16 @@ func TestStoreMessagePreservesExistingDirectPathOnEmptyUpdate(t *testing.T) {
 	now := time.Now()
 
 	original := &domainChatStorage.Message{
-		ID:         "msg-preserve-direct-path",
-		ChatJID:    "120363424157959439@g.us",
-		DeviceID:   "5511999999999@s.whatsapp.net",
-		Sender:     "5511888888888@s.whatsapp.net",
-		Timestamp:  now,
-		MediaType:  "audio",
-		DirectPath: "/mms/audio/original",
+		ID:               "msg-preserve-direct-path",
+		ChatJID:          "120363424157959439@g.us",
+		DeviceID:         "5511999999999@s.whatsapp.net",
+		Sender:           "5511888888888@s.whatsapp.net",
+		Timestamp:        now,
+		MediaType:        "audio",
+		DirectPath:       "/mms/audio/original",
+		ReplyToMessageID: "quoted-1",
+		QuotedText:       "Mensagem anterior",
+		QuotedSender:     "5511777777777@s.whatsapp.net",
 	}
 	if err := repo.StoreMessage(original); err != nil {
 		t.Fatalf("StoreMessage(original) unexpected error: %v", err)
@@ -193,6 +200,9 @@ func TestStoreMessagePreservesExistingDirectPathOnEmptyUpdate(t *testing.T) {
 	if stored.DirectPath != original.DirectPath {
 		t.Fatalf("expected direct path %q to be preserved, got %q", original.DirectPath, stored.DirectPath)
 	}
+	if stored.ReplyToMessageID != original.ReplyToMessageID || stored.QuotedText != original.QuotedText || stored.QuotedSender != original.QuotedSender {
+		t.Fatalf("expected reply metadata to be preserved, got %+v", stored)
+	}
 }
 
 func TestStoreMessagesBatchPreservesExistingDirectPathOnEmptyUpdate(t *testing.T) {
@@ -200,13 +210,16 @@ func TestStoreMessagesBatchPreservesExistingDirectPathOnEmptyUpdate(t *testing.T
 	now := time.Now()
 
 	original := &domainChatStorage.Message{
-		ID:         "msg-batch-preserve-direct-path",
-		ChatJID:    "120363424157959439@g.us",
-		DeviceID:   "5511999999999@s.whatsapp.net",
-		Sender:     "5511888888888@s.whatsapp.net",
-		Timestamp:  now,
-		MediaType:  "document",
-		DirectPath: "/mms/document/original",
+		ID:               "msg-batch-preserve-direct-path",
+		ChatJID:          "120363424157959439@g.us",
+		DeviceID:         "5511999999999@s.whatsapp.net",
+		Sender:           "5511888888888@s.whatsapp.net",
+		Timestamp:        now,
+		MediaType:        "document",
+		DirectPath:       "/mms/document/original",
+		ReplyToMessageID: "quoted-2",
+		QuotedText:       "Contexto batch",
+		QuotedSender:     "5511666666666@s.whatsapp.net",
 	}
 	if err := repo.StoreMessage(original); err != nil {
 		t.Fatalf("StoreMessage(original) unexpected error: %v", err)
@@ -233,6 +246,9 @@ func TestStoreMessagesBatchPreservesExistingDirectPathOnEmptyUpdate(t *testing.T
 	}
 	if stored.DirectPath != original.DirectPath {
 		t.Fatalf("expected direct path %q to be preserved after batch update, got %q", original.DirectPath, stored.DirectPath)
+	}
+	if stored.ReplyToMessageID != original.ReplyToMessageID || stored.QuotedText != original.QuotedText || stored.QuotedSender != original.QuotedSender {
+		t.Fatalf("expected reply metadata to be preserved after batch update, got %+v", stored)
 	}
 }
 

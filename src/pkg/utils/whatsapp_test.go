@@ -96,3 +96,29 @@ func TestExtractMediaInfoReturnsDirectPath(t *testing.T) {
 		t.Fatalf("expected file length 123, got %d", fileLength)
 	}
 }
+
+func TestExtractReplyContextReturnsQuotedMetadata(t *testing.T) {
+	msg := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String("Resposta"),
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaID:    proto.String("quoted-msg-1"),
+				Participant: proto.String("5511888888888@s.whatsapp.net"),
+				QuotedMessage: &waE2E.Message{
+					Conversation: proto.String("Mensagem original"),
+				},
+			},
+		},
+	}
+
+	reply := ExtractReplyContext(msg)
+	if reply.RepliedID != "quoted-msg-1" {
+		t.Fatalf("expected replied id quoted-msg-1, got %q", reply.RepliedID)
+	}
+	if reply.QuotedParticipant != "5511888888888@s.whatsapp.net" {
+		t.Fatalf("expected quoted participant to be preserved, got %q", reply.QuotedParticipant)
+	}
+	if reply.QuotedMessage != "Mensagem original" {
+		t.Fatalf("expected quoted message to be preserved, got %q", reply.QuotedMessage)
+	}
+}

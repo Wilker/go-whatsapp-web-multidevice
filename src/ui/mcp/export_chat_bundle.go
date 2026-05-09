@@ -31,7 +31,7 @@ const (
 	exportLLMMarkdownFilename     = "chat_export_llm.md"
 	exportBundleArchiveFilename   = "chat_export_bundle.zip"
 	exportMediaDirectoryName      = "media"
-	exportStructuredFormatVersion = "chat_export_bundle_v2"
+	exportStructuredFormatVersion = "chat_export_bundle_v3"
 )
 
 var exportUnsafeFilenameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -78,6 +78,17 @@ type chatExportPreparedMedia struct {
 	PendingBatchRetry   bool
 	BatchRetryAttempted bool
 	IncludedAfterBatch  bool
+}
+
+type chatExportReplyReference struct {
+	MessageID       string
+	SenderJID       string
+	SenderLabel     string
+	SenderIdentity  string
+	QuotedText      string
+	FoundInExport   bool
+	ExportedSeq     int
+	ExportedAtLocal string
 }
 
 type chatExportMediaStats struct {
@@ -630,6 +641,7 @@ func (h *QueryHandler) generateLocalChatExport(
 
 	llmMessages := make([]map[string]any, 0, len(preparedMessages))
 	mediaIndex := make([]map[string]any, 0)
+	referencedMessages := buildPreparedMessageLookup(preparedMessages)
 
 	for _, prepared := range preparedMessages {
 		messageRecord := map[string]any{
@@ -647,6 +659,10 @@ func (h *QueryHandler) generateLocalChatExport(
 			"from_me": prepared.Message.IsFromMe,
 			"text":    prepared.Text,
 		}
+		replyReference := buildExportReplyReference(prepared.Message, referencedMessages)
+		if replyReference != nil {
+			messageRecord["reply_to"] = buildExportReplyRecord(replyReference)
+		}
 
 		markdownLines = append(markdownLines, fmt.Sprintf(
 			"%d. [%s] sender=%s (%s) from_me=%t id=%s",
@@ -663,14 +679,19 @@ func (h *QueryHandler) generateLocalChatExport(
 			if text == "" {
 				text = "(mensagem sem texto)"
 			}
-			humanLines = append(humanLines, fmt.Sprintf(
+			humanLine := fmt.Sprintf(
 				"%s - %s (%s): %s",
 				prepared.LocalHuman,
 				prepared.Sender["label"],
 				prepared.Sender["identity"],
 				text,
-			))
+			)
+			if replySuffix := formatExportReplyHumanSuffix(replyReference); replySuffix != "" {
+				humanLine += replySuffix
+			}
+			humanLines = append(humanLines, humanLine)
 			markdownLines = append(markdownLines, "   text: "+truncateRunes(text, 260))
+			markdownLines = append(markdownLines, formatExportReplyMarkdownLines(replyReference)...)
 			messageRecord["content"] = map[string]any{
 				"kind": "text",
 				"text": text,
@@ -700,6 +721,9 @@ func (h *QueryHandler) generateLocalChatExport(
 		if reason := getPreparedMediaRecordString(prepared.Media, "failure_reason"); reason != "" {
 			humanLine += " | arquivo_nao_incluido: " + reason
 		}
+		if replySuffix := formatExportReplyHumanSuffix(replyReference); replySuffix != "" {
+			humanLine += replySuffix
+		}
 		humanLines = append(humanLines, humanLine)
 
 		markdownLines = append(markdownLines, fmt.Sprintf(
@@ -724,6 +748,7 @@ func (h *QueryHandler) generateLocalChatExport(
 		if prepared.Text != "" {
 			markdownLines = append(markdownLines, "   text: "+truncateRunes(prepared.Text, 260))
 		}
+		markdownLines = append(markdownLines, formatExportReplyMarkdownLines(replyReference)...)
 
 		messageRecord["content"] = map[string]any{
 			"kind": "media",
@@ -1135,6 +1160,18 @@ func wasIncludedPreparedMedia(media *chatExportPreparedMedia) bool {
 	return included
 }
 
+func buildPreparedMessageLookup(messages []chatExportPreparedMessage) map[string]chatExportPreparedMessage {
+	lookup := make(map[string]chatExportPreparedMessage, len(messages))
+	for _, prepared := range messages {
+		messageID := strings.TrimSpace(prepared.Message.ID)
+		if messageID == "" {
+			continue
+		}
+		lookup[messageID] = prepared
+	}
+	return lookup
+}
+
 func buildExportSenderLookup(ctx context.Context) (map[string]string, string) {
 	result := map[string]string{}
 	client := whatsapp.ClientFromContext(ctx)
@@ -1210,6 +1247,136 @@ func buildExportSenderInfo(
 		"label":        label,
 		"identity":     identity,
 	}
+}
+
+func buildExportReplyReference(
+	msg domainChat.MessageInfo,
+	preparedMessages map[string]chatExportPreparedMessage,
+) *chatExportReplyReference {
+	messageID := strings.TrimSpace(msg.ReplyToMessageID)
+	quotedText := strings.TrimSpace(msg.QuotedText)
+	senderJID := strings.TrimSpace(msg.QuotedSenderJID)
+	if messageID == "" && quotedText == "" && senderJID == "" {
+		return nil
+	}
+
+	reference := &chatExportReplyReference{
+		MessageID:      messageID,
+		SenderJID:      senderJID,
+		QuotedText:     quotedText,
+		SenderLabel:    fallbackExportReplyLabel(senderJID),
+		SenderIdentity: fallbackExportReplyIdentity(senderJID),
+	}
+
+	if referenced, ok := preparedMessages[messageID]; ok {
+		reference.FoundInExport = true
+		reference.ExportedSeq = referenced.Seq
+		reference.ExportedAtLocal = referenced.LocalRFC3339
+		if reference.QuotedText == "" {
+			reference.QuotedText = strings.TrimSpace(referenced.Text)
+		}
+		if reference.SenderJID == "" {
+			reference.SenderJID = strings.TrimSpace(referenced.Message.SenderJID)
+		}
+		if label := strings.TrimSpace(referenced.Sender["label"]); label != "" {
+			reference.SenderLabel = label
+		}
+		if identity := strings.TrimSpace(referenced.Sender["identity"]); identity != "" {
+			reference.SenderIdentity = identity
+		}
+	}
+
+	if reference.SenderLabel == "" {
+		reference.SenderLabel = fallbackExportReplyLabel(reference.SenderJID)
+	}
+	if reference.SenderIdentity == "" {
+		reference.SenderIdentity = fallbackExportReplyIdentity(reference.SenderJID)
+	}
+
+	return reference
+}
+
+func buildExportReplyRecord(reply *chatExportReplyReference) map[string]any {
+	if reply == nil {
+		return nil
+	}
+
+	record := map[string]any{
+		"message_id":      reply.MessageID,
+		"sender_jid":      reply.SenderJID,
+		"sender_label":    reply.SenderLabel,
+		"sender_identity": reply.SenderIdentity,
+		"text":            reply.QuotedText,
+		"found_in_export": reply.FoundInExport,
+	}
+	if reply.ExportedSeq > 0 {
+		record["exported_seq"] = reply.ExportedSeq
+	}
+	if strings.TrimSpace(reply.ExportedAtLocal) != "" {
+		record["exported_sent_at_local"] = reply.ExportedAtLocal
+	}
+	return record
+}
+
+func fallbackExportReplyLabel(senderJID string) string {
+	trimmed := strings.TrimSpace(senderJID)
+	if trimmed == "" {
+		return ""
+	}
+	if phone := strings.TrimSpace(utils.ExtractPhoneFromJID(trimmed)); phone != "" {
+		return phone
+	}
+	return trimmed
+}
+
+func fallbackExportReplyIdentity(senderJID string) string {
+	return strings.TrimSpace(senderJID)
+}
+
+func formatExportReplyHumanSuffix(reply *chatExportReplyReference) string {
+	if reply == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, 3)
+	if reply.FoundInExport && reply.ExportedSeq > 0 {
+		parts = append(parts, fmt.Sprintf("responde seq=%d id=%s", reply.ExportedSeq, reply.MessageID))
+	} else if reply.MessageID != "" {
+		parts = append(parts, "responde id="+reply.MessageID)
+	}
+	if reply.SenderIdentity != "" {
+		parts = append(parts, "remetente="+reply.SenderIdentity)
+	}
+	if reply.QuotedText != "" {
+		parts = append(parts, "citado="+truncateRunes(reply.QuotedText, 140))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " | " + strings.Join(parts, " | ")
+}
+
+func formatExportReplyMarkdownLines(reply *chatExportReplyReference) []string {
+	if reply == nil {
+		return nil
+	}
+
+	line := "   reply_to:"
+	if reply.FoundInExport && reply.ExportedSeq > 0 {
+		line += fmt.Sprintf(" seq=%d", reply.ExportedSeq)
+	}
+	if reply.MessageID != "" {
+		line += " message_id=" + reply.MessageID
+	}
+	if reply.SenderIdentity != "" {
+		line += " sender=" + reply.SenderIdentity
+	}
+
+	lines := []string{line}
+	if reply.QuotedText != "" {
+		lines = append(lines, "   reply_text: "+truncateRunes(reply.QuotedText, 260))
+	}
+	return lines
 }
 
 func (h *QueryHandler) includeMediaInExport(

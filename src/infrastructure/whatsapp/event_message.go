@@ -204,6 +204,9 @@ func buildMessageBody(ctx context.Context, client *whatsmeow.Client, evt *events
 	if message.QuotedMessage != "" {
 		payload["quoted_body"] = message.QuotedMessage
 	}
+	if message.QuotedParticipant != "" {
+		payload["quoted_sender"] = message.QuotedParticipant
+	}
 
 	return nil
 }

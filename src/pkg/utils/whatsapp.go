@@ -749,10 +749,11 @@ func ResolvePhoneToLID(ctx context.Context, jid types.JID, client *whatsmeow.Cli
 
 // Internal message types for event handling
 type EvtMessage struct {
-	Text          string `json:"text"`
-	ID            string `json:"id"`
-	RepliedId     string `json:"replied_id"`
-	QuotedMessage string `json:"quoted_message"`
+	Text              string `json:"text"`
+	ID                string `json:"id"`
+	RepliedId         string `json:"replied_id"`
+	QuotedMessage     string `json:"quoted_message"`
+	QuotedParticipant string `json:"quoted_participant"`
 }
 
 type EvtReaction struct {
@@ -801,6 +802,63 @@ func UnwrapMessage(msg *waE2E.Message) *waE2E.Message {
 	return inner
 }
 
+type MessageReplyContext struct {
+	RepliedID         string
+	QuotedMessage     string
+	QuotedParticipant string
+}
+
+func extractMessageContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
+	if msg == nil {
+		return nil
+	}
+	if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
+		return extendedText.GetContextInfo()
+	}
+	if img := msg.GetImageMessage(); img != nil {
+		return img.GetContextInfo()
+	}
+	if vid := msg.GetVideoMessage(); vid != nil {
+		return vid.GetContextInfo()
+	}
+	if aud := msg.GetAudioMessage(); aud != nil {
+		return aud.GetContextInfo()
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		return doc.GetContextInfo()
+	}
+	if sticker := msg.GetStickerMessage(); sticker != nil {
+		return sticker.GetContextInfo()
+	}
+	return nil
+}
+
+// ExtractReplyContext extracts reply/reference metadata from a WhatsApp proto message.
+func ExtractReplyContext(msg *waE2E.Message) MessageReplyContext {
+	inner := UnwrapMessage(msg)
+	if inner == nil {
+		return MessageReplyContext{}
+	}
+
+	if protocolMessage := inner.GetProtocolMessage(); protocolMessage != nil {
+		if editedMessage := protocolMessage.GetEditedMessage(); editedMessage != nil {
+			return ExtractReplyContext(editedMessage)
+		}
+	}
+
+	contextInfo := extractMessageContextInfo(inner)
+	if contextInfo == nil {
+		return MessageReplyContext{}
+	}
+
+	quoted := UnwrapMessage(contextInfo.GetQuotedMessage())
+	return MessageReplyContext{
+		RepliedID:         strings.TrimSpace(contextInfo.GetStanzaID()),
+		QuotedMessage:     strings.TrimSpace(ExtractMessageTextFromProto(quoted)),
+		QuotedParticipant: strings.TrimSpace(contextInfo.GetParticipant()),
+	}
+}
+
 // BuildEventMessage builds event message structure
 func BuildEventMessage(evt *events.Message) (message EvtMessage) {
 	msg := UnwrapMessage(evt.Message)
@@ -810,17 +868,18 @@ func BuildEventMessage(evt *events.Message) (message EvtMessage) {
 
 	if extendedMessage := msg.GetExtendedTextMessage(); extendedMessage != nil {
 		message.Text = extendedMessage.GetText()
-		message.RepliedId = extendedMessage.ContextInfo.GetStanzaID()
-		message.QuotedMessage = extendedMessage.ContextInfo.GetQuotedMessage().GetConversation()
 	} else if protocolMessage := msg.GetProtocolMessage(); protocolMessage != nil {
 		if editedMessage := protocolMessage.GetEditedMessage(); editedMessage != nil {
 			if extendedText := editedMessage.GetExtendedTextMessage(); extendedText != nil {
 				message.Text = extendedText.GetText()
-				message.RepliedId = extendedText.ContextInfo.GetStanzaID()
-				message.QuotedMessage = extendedText.ContextInfo.GetQuotedMessage().GetConversation()
 			}
 		}
 	}
+
+	replyContext := ExtractReplyContext(evt.Message)
+	message.RepliedId = replyContext.RepliedID
+	message.QuotedMessage = replyContext.QuotedMessage
+	message.QuotedParticipant = replyContext.QuotedParticipant
 
 	return message
 }

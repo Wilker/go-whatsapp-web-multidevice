@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	domainChat "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
@@ -320,5 +321,89 @@ func TestGenerateLocalChatExportKeepsUnavailableMediaAsFailed(t *testing.T) {
 	}
 	if messageService.downloadCalls[msgID] != 1 {
 		t.Fatalf("expected export to skip second download pass, got %d calls", messageService.downloadCalls[msgID])
+	}
+}
+
+func TestGenerateLocalChatExportIncludesReplyReferences(t *testing.T) {
+	handler := &QueryHandler{}
+	outputDir := t.TempDir()
+
+	resultPayload, _, err := handler.generateLocalChatExport(context.Background(), chatExportOptions{
+		ChatJID:    "120363424157959439@g.us",
+		ExportType: exportTypeFull,
+		OutputDir:  outputDir,
+	}, chatExportCollected{
+		ChatInfo: domainChat.ChatInfo{
+			JID:  "120363424157959439@g.us",
+			Name: "Diretoria - Gesso Casa Branca",
+		},
+		Messages: []domainChat.MessageInfo{
+			{
+				ID:        "msg-root",
+				ChatJID:   "120363424157959439@g.us",
+				SenderJID: "5511888888888@s.whatsapp.net",
+				Content:   "Mensagem original",
+				Timestamp: "2026-03-09T11:13:00-03:00",
+			},
+			{
+				ID:               "msg-reply",
+				ChatJID:          "120363424157959439@g.us",
+				SenderJID:        "5511999999999@s.whatsapp.net",
+				Content:          "Resposta com contexto",
+				Timestamp:        "2026-03-09T11:14:00-03:00",
+				ReplyToMessageID: "msg-root",
+				QuotedText:       "Mensagem original",
+				QuotedSenderJID:  "5511888888888@s.whatsapp.net",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("generateLocalChatExport() unexpected error: %v", err)
+	}
+
+	files := resultPayload["files"].(map[string]any)
+	llmJSONPath := files["llm_json"].(string)
+	humanTXTPath := files["human_txt"].(string)
+	llmMarkdownPath := files["llm_markdown"].(string)
+
+	rawJSON, err := os.ReadFile(llmJSONPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", llmJSONPath, err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rawJSON, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() unexpected error: %v", err)
+	}
+
+	messages := payload["messages"].([]any)
+	replyTo := messages[1].(map[string]any)["reply_to"].(map[string]any)
+	if replyTo["message_id"] != "msg-root" {
+		t.Fatalf("expected reply message id msg-root, got %#v", replyTo["message_id"])
+	}
+	if replyTo["found_in_export"] != true {
+		t.Fatalf("expected found_in_export=true, got %#v", replyTo["found_in_export"])
+	}
+	if replyTo["exported_seq"] != float64(1) {
+		t.Fatalf("expected exported_seq=1, got %#v", replyTo["exported_seq"])
+	}
+	if replyTo["text"] != "Mensagem original" {
+		t.Fatalf("expected quoted text to be preserved, got %#v", replyTo["text"])
+	}
+
+	humanContent, err := os.ReadFile(humanTXTPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", humanTXTPath, err)
+	}
+	if !strings.Contains(string(humanContent), "responde seq=1 id=msg-root") {
+		t.Fatalf("expected human export to include reply sequence reference, got %s", string(humanContent))
+	}
+
+	markdownContent, err := os.ReadFile(llmMarkdownPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", llmMarkdownPath, err)
+	}
+	if !strings.Contains(string(markdownContent), "reply_to: seq=1 message_id=msg-root") {
+		t.Fatalf("expected markdown export to include reply reference, got %s", string(markdownContent))
 	}
 }
