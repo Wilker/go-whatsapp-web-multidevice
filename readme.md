@@ -455,21 +455,113 @@ Notes:
 - SSE endpoint: `http://localhost:8080/sse`
 - Message endpoint: `http://localhost:8080/message`
 
-### MCP Configuration
+### MCP Client Configuration
 
-Make sure you have the MCP server running: `./whatsapp mcp`
+Start the local WhatsApp MCP server first. The server currently exposes an SSE transport, so clients that only support
+stdio should use `mcp-remote` as a bridge.
 
-For AI tools that support MCP with SSE (like Cursor), add this configuration:
+```bash
+cd /Users/wilker/git/go-whatsapp-web-multidevice/src
+go run . mcp --host 127.0.0.1 --port 8080
+```
+
+The local endpoints are:
+
+- SSE: `http://127.0.0.1:8080/sse`
+- Message: `http://127.0.0.1:8080/message`
+
+Install the bridge if needed:
+
+```bash
+npm install -g mcp-remote
+which npx
+```
+
+Use the absolute `npx` path returned by `which npx` when configuring desktop apps, because GUI apps often do not load
+your shell `PATH`.
+
+#### Claude Desktop for macOS
+
+Edit:
+
+```text
+~/Library/Application Support/Claude/claude_desktop_config.json
+```
+
+Merge the `mcpServers` block into the existing JSON. Do not remove existing `preferences`.
 
 ```json
 {
+  "preferences": {
+    "coworkWebSearchEnabled": true,
+    "coworkScheduledTasksEnabled": true,
+    "ccdScheduledTasksEnabled": true,
+    "sidebarMode": "task"
+  },
   "mcpServers": {
-    "whatsapp": {
-      "url": "http://localhost:8080/sse"
+    "whatsapp-local": {
+      "command": "/absolute/path/to/npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://127.0.0.1:8080/sse",
+        "--allow-http",
+        "--transport",
+        "sse-only"
+      ]
     }
   }
 }
 ```
+
+Restart Claude Desktop after changing the file. If a tool schema does not refresh after a server update, remove/re-add
+the local MCP server or restart the app.
+
+#### Codex
+
+Codex can register stdio MCP servers through the CLI. Because this WhatsApp server exposes SSE, register it through
+`mcp-remote`:
+
+```bash
+codex mcp add whatsapp-local -- /absolute/path/to/npx -y mcp-remote http://127.0.0.1:8080/sse --allow-http --transport sse-only
+codex mcp list
+```
+
+Equivalent manual configuration in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.whatsapp-local]
+enabled = true
+command = "/absolute/path/to/npx"
+args = [
+  "-y",
+  "mcp-remote",
+  "http://127.0.0.1:8080/sse",
+  "--allow-http",
+  "--transport",
+  "sse-only",
+]
+```
+
+Restart Codex after changing `~/.codex/config.toml`. If Codex is already open, start a new conversation after the MCP
+server reconnects so the tool schema is reloaded.
+
+#### SSE-capable clients
+
+For AI tools that directly support MCP over SSE, point them at the SSE endpoint:
+
+```json
+{
+  "mcpServers": {
+    "whatsapp-local": {
+      "url": "http://127.0.0.1:8080/sse"
+    }
+  }
+}
+```
+
+Do not configure macOS `launchd` socket activation for this server. If you use a LaunchAgent, omit the `Sockets` block;
+the Go process binds `127.0.0.1:8080` itself.
 
 ### Production Mode REST (docker)
 
