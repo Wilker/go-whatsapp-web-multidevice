@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	domainChat "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
 	domainMessage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/message"
@@ -237,6 +238,7 @@ func TestGenerateLocalChatExportRecoversMediaAfterBatchRetry(t *testing.T) {
 
 	files := resultPayload["files"].(map[string]any)
 	llmJSONPath := files["llm_json"].(string)
+	llmMarkdownPath := files["llm_markdown"].(string)
 	rawJSON, err := os.ReadFile(llmJSONPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) unexpected error: %v", llmJSONPath, err)
@@ -254,6 +256,20 @@ func TestGenerateLocalChatExportRecoversMediaAfterBatchRetry(t *testing.T) {
 	}
 	if media["recovery_method"] != domainMessage.MediaRecoveryMethodMediaRetry {
 		t.Fatalf("expected recovery_method media_retry, got %#v", media["recovery_method"])
+	}
+
+	markdownContent, err := os.ReadFile(llmMarkdownPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", llmMarkdownPath, err)
+	}
+	markdown := string(markdownContent)
+	if !strings.Contains(markdown, "[media ref=media_0001 type=audio path=media/audio.ogg status=included_after_batch_recovery]") {
+		t.Fatalf("expected compact media metadata in markdown, got %s", markdown)
+	}
+	for _, verboseField := range []string{"message_id=", "archive_filename=", "recovery_method:"} {
+		if strings.Contains(markdown, verboseField) {
+			t.Fatalf("expected markdown not to contain verbose media field %q, got %s", verboseField, markdown)
+		}
 	}
 }
 
@@ -403,7 +419,138 @@ func TestGenerateLocalChatExportIncludesReplyReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s) unexpected error: %v", llmMarkdownPath, err)
 	}
-	if !strings.Contains(string(markdownContent), "reply_to: seq=1 message_id=msg-root") {
-		t.Fatalf("expected markdown export to include reply reference, got %s", string(markdownContent))
+	markdown := string(markdownContent)
+	replyTimestamp := formatExportCompactTimestamp(parseStoredMessageTime("2026-03-09T11:14:00-03:00").In(time.Now().Location()))
+	if !strings.Contains(markdown, "2 ["+replyTimestamp+"] 5511999999999: Resposta com contexto reply=1") {
+		t.Fatalf("expected compact markdown export to include reply sequence, got %s", markdown)
+	}
+	if strings.Contains(markdown, "reply_to:") || strings.Contains(markdown, "reply_text: Mensagem original") {
+		t.Fatalf("expected markdown to avoid verbose in-export reply text, got %s", markdown)
+	}
+}
+
+func TestGenerateLocalChatExportUsesCompactMarkdownWithoutTruncation(t *testing.T) {
+	handler := &QueryHandler{}
+	outputDir := t.TempDir()
+	longText := strings.Repeat("conteudo completo ", 30) + "fim"
+	longReplyText := strings.Repeat("texto citado completo ", 20) + "fim"
+
+	resultPayload, _, err := handler.generateLocalChatExport(context.Background(), chatExportOptions{
+		ChatJID:    "120363424157959439@g.us",
+		ExportType: exportTypeFull,
+		OutputDir:  outputDir,
+	}, chatExportCollected{
+		ChatInfo: domainChat.ChatInfo{
+			JID:  "120363424157959439@g.us",
+			Name: "Diretoria - Gesso Casa Branca",
+		},
+		Messages: []domainChat.MessageInfo{
+			{
+				ID:        "msg-root",
+				ChatJID:   "120363424157959439@g.us",
+				SenderJID: "5521982572423@s.whatsapp.net",
+				Content:   "Mensagem original",
+				Timestamp: "2026-03-09T11:13:00-03:00",
+				IsFromMe:  true,
+			},
+			{
+				ID:        "msg-long",
+				ChatJID:   "120363424157959439@g.us",
+				SenderJID: "558896420094@s.whatsapp.net",
+				Content:   longText,
+				Timestamp: "2026-03-09T11:13:30-03:00",
+			},
+			{
+				ID:               "msg-missing-reply",
+				ChatJID:          "120363424157959439@g.us",
+				SenderJID:        "558896420094@s.whatsapp.net",
+				Content:          "Resposta para mensagem fora do recorte",
+				Timestamp:        "2026-03-09T11:14:00-03:00",
+				ReplyToMessageID: "missing-root",
+				QuotedText:       longReplyText,
+				QuotedSenderJID:  "5521982572423@s.whatsapp.net",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("generateLocalChatExport() unexpected error: %v", err)
+	}
+
+	files := resultPayload["files"].(map[string]any)
+	llmMarkdownPath := files["llm_markdown"].(string)
+	markdownContent, err := os.ReadFile(llmMarkdownPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", llmMarkdownPath, err)
+	}
+	markdown := string(markdownContent)
+
+	for _, redundantHeader := range []string{"# Chat Export:", "**Gerado em (local):", "**Gerado em (UTC):", "# Chat Export for LLM\nchat: Diretoria - Gesso Casa Branca | 120363424157959439@g.us\nmessages_exported"} {
+		if strings.Contains(markdown, redundantHeader) {
+			t.Fatalf("expected compact header without redundant marker %q, got %s", redundantHeader, markdown)
+		}
+	}
+	if !strings.Contains(markdown, "# Chat Export for LLM") ||
+		!strings.Contains(markdown, "chat: Diretoria - Gesso Casa Branca | 120363424157959439@g.us") ||
+		!strings.Contains(markdown, "senders: Eu=5521982572423; 558896420094") {
+		t.Fatalf("expected compact header and sender directory, got %s", markdown)
+	}
+	rootTimestamp := formatExportCompactTimestamp(parseStoredMessageTime("2026-03-09T11:13:00-03:00").In(time.Now().Location()))
+	if !strings.Contains(markdown, "1 ["+rootTimestamp+"] Eu: Mensagem original") {
+		t.Fatalf("expected compact message line with seconds, got %s", markdown)
+	}
+	if !strings.Contains(markdown, longText) {
+		t.Fatalf("expected full message text without truncation, got %s", markdown)
+	}
+	missingReplyTimestamp := formatExportCompactTimestamp(parseStoredMessageTime("2026-03-09T11:14:00-03:00").In(time.Now().Location()))
+	if !strings.Contains(markdown, "3 ["+missingReplyTimestamp+"] 558896420094: Resposta para mensagem fora do recorte reply_id=missing-root") {
+		t.Fatalf("expected missing reply id in compact line, got %s", markdown)
+	}
+	if !strings.Contains(markdown, "reply_text: "+longReplyText) {
+		t.Fatalf("expected full missing reply text without truncation, got %s", markdown)
+	}
+}
+
+func TestGenerateLocalChatExportOmitsConversationPreviewFromMCPPayload(t *testing.T) {
+	handler := &QueryHandler{}
+	conversationText := "texto que nao deve voltar no payload mcp"
+
+	resultPayload, fallback, err := handler.generateLocalChatExport(context.Background(), chatExportOptions{
+		ChatJID:    "120363424157959439@g.us",
+		ExportType: exportTypeFull,
+		OutputDir:  t.TempDir(),
+	}, chatExportCollected{
+		ChatInfo: domainChat.ChatInfo{
+			JID:  "120363424157959439@g.us",
+			Name: "Diretoria - Gesso Casa Branca",
+		},
+		Messages: []domainChat.MessageInfo{
+			{
+				ID:        "msg-no-preview",
+				ChatJID:   "120363424157959439@g.us",
+				SenderJID: "5521982572423@s.whatsapp.net",
+				Content:   conversationText,
+				Timestamp: "2026-03-09T11:13:00-03:00",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("generateLocalChatExport() unexpected error: %v", err)
+	}
+
+	if _, ok := resultPayload["preview"]; ok {
+		t.Fatalf("expected MCP result payload not to include conversation preview, got %+v", resultPayload["preview"])
+	}
+	for _, unexpectedKey := range []string{"format", "messages", "media_index", "timeline_markdown", "human_txt_preview"} {
+		if _, ok := resultPayload[unexpectedKey]; ok {
+			t.Fatalf("expected MCP result payload not to include %q, got %+v", unexpectedKey, resultPayload[unexpectedKey])
+		}
+	}
+	for _, expectedKey := range []string{"chat", "export", "stats", "files"} {
+		if _, ok := resultPayload[expectedKey]; !ok {
+			t.Fatalf("expected MCP result payload to include %q, got %+v", expectedKey, resultPayload)
+		}
+	}
+	if strings.Contains(fallback, "preview:") || strings.Contains(fallback, conversationText) {
+		t.Fatalf("expected MCP fallback summary not to include conversation preview, got %s", fallback)
 	}
 }

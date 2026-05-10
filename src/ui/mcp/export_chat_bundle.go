@@ -63,6 +63,7 @@ type chatExportPreparedMessage struct {
 	Text         string
 	MediaType    string
 	LocalHuman   string
+	LocalCompact string
 	LocalRFC3339 string
 	UTCRFC3339   string
 	Media        *chatExportPreparedMedia
@@ -419,21 +420,6 @@ func (h *QueryHandler) generateLocalChatExport(
 	})
 
 	humanLines := make([]string, 0, len(orderedMessages))
-	markdownLines := []string{
-		fmt.Sprintf("# Chat Export: %s", chatName),
-		"",
-		fmt.Sprintf("**Gerado em (local):** %s", time.Now().In(loc).Format(time.RFC3339)),
-		fmt.Sprintf("**Gerado em (UTC):** %s", time.Now().UTC().Format(time.RFC3339)),
-		fmt.Sprintf("**Total de mensagens:** %d", len(orderedMessages)),
-		fmt.Sprintf("**Tipo de export:** %s", options.ExportType),
-		fmt.Sprintf("**Chat:** %s", options.ChatJID),
-		"",
-		"---",
-		"",
-		"# Chat Export for LLM",
-		fmt.Sprintf("chat: %s | %s", chatName, options.ChatJID),
-		fmt.Sprintf("messages_exported: %d", len(orderedMessages)),
-	}
 
 	mediaDir := filepath.Join(exportDir, exportMediaDirectoryName)
 	if options.IncludeMedia {
@@ -451,6 +437,7 @@ func (h *QueryHandler) generateLocalChatExport(
 		sentAt := parseStoredMessageTime(msg.Timestamp)
 		localTime := sentAt.In(loc)
 		localHuman := formatExportHumanTimestamp(localTime)
+		localCompact := formatExportCompactTimestamp(localTime)
 		localRFC3339 := localTime.Format(time.RFC3339)
 		utcRFC3339 := sentAt.UTC().Format(time.RFC3339)
 
@@ -468,6 +455,7 @@ func (h *QueryHandler) generateLocalChatExport(
 			Text:         text,
 			MediaType:    mediaType,
 			LocalHuman:   localHuman,
+			LocalCompact: localCompact,
 			LocalRFC3339: localRFC3339,
 			UTCRFC3339:   utcRFC3339,
 		}
@@ -642,6 +630,9 @@ func (h *QueryHandler) generateLocalChatExport(
 	llmMessages := make([]map[string]any, 0, len(preparedMessages))
 	mediaIndex := make([]map[string]any, 0)
 	referencedMessages := buildPreparedMessageLookup(preparedMessages)
+	senderAliases, senderDirectoryLines := buildExportSenderDirectory(preparedMessages)
+	markdownLines := buildExportMarkdownHeader(chatName, options.ChatJID, len(orderedMessages), loc)
+	markdownLines = append(markdownLines, senderDirectoryLines...)
 
 	for _, prepared := range preparedMessages {
 		messageRecord := map[string]any{
@@ -663,16 +654,7 @@ func (h *QueryHandler) generateLocalChatExport(
 		if replyReference != nil {
 			messageRecord["reply_to"] = buildExportReplyRecord(replyReference)
 		}
-
-		markdownLines = append(markdownLines, fmt.Sprintf(
-			"%d. [%s] sender=%s (%s) from_me=%t id=%s",
-			prepared.Seq,
-			prepared.LocalHuman,
-			prepared.Sender["label"],
-			prepared.Sender["identity"],
-			prepared.Message.IsFromMe,
-			prepared.Message.ID,
-		))
+		senderAlias := exportSenderAlias(senderAliases, prepared.Sender)
 
 		if prepared.Media == nil {
 			text := prepared.Text
@@ -690,8 +672,8 @@ func (h *QueryHandler) generateLocalChatExport(
 				humanLine += replySuffix
 			}
 			humanLines = append(humanLines, humanLine)
-			markdownLines = append(markdownLines, "   text: "+truncateRunes(text, 260))
-			markdownLines = append(markdownLines, formatExportReplyMarkdownLines(replyReference)...)
+			markdownLines = append(markdownLines, formatExportMarkdownTextLine(prepared, senderAlias, text, replyReference))
+			markdownLines = append(markdownLines, formatExportReplyMarkdownDetailLines(replyReference)...)
 			messageRecord["content"] = map[string]any{
 				"kind": "text",
 				"text": text,
@@ -726,29 +708,8 @@ func (h *QueryHandler) generateLocalChatExport(
 		}
 		humanLines = append(humanLines, humanLine)
 
-		markdownLines = append(markdownLines, fmt.Sprintf(
-			"   media: ref=%s message_id=%s type=%s archive_filename=%s",
-			prepared.Media.Ref,
-			prepared.Message.ID,
-			prepared.MediaType,
-			prepared.Media.ArchiveFilename,
-		))
-		if includedPath := getPreparedMediaRecordString(prepared.Media, "archive_path"); includedPath != "" {
-			markdownLines = append(markdownLines, "   archive_path: "+includedPath)
-		}
-		if method := getPreparedMediaRecordString(prepared.Media, "recovery_method"); method != "" {
-			markdownLines = append(markdownLines, "   recovery_method: "+method)
-		}
-		if reason := getPreparedMediaRecordString(prepared.Media, "failure_reason"); reason != "" {
-			markdownLines = append(markdownLines, "   failure_reason: "+reason)
-		}
-		if status := getPreparedMediaRecordString(prepared.Media, "download_status"); status != "" {
-			markdownLines = append(markdownLines, "   download_status: "+status)
-		}
-		if prepared.Text != "" {
-			markdownLines = append(markdownLines, "   text: "+truncateRunes(prepared.Text, 260))
-		}
-		markdownLines = append(markdownLines, formatExportReplyMarkdownLines(replyReference)...)
+		markdownLines = append(markdownLines, formatExportMarkdownMediaLine(prepared, senderAlias, replyReference))
+		markdownLines = append(markdownLines, formatExportReplyMarkdownDetailLines(replyReference)...)
 
 		messageRecord["content"] = map[string]any{
 			"kind": "media",
@@ -908,7 +869,6 @@ func (h *QueryHandler) generateLocalChatExport(
 	}
 
 	resultPayload := map[string]any{
-		"format": exportStructuredFormatVersion,
 		"chat": map[string]any{
 			"jid":  options.ChatJID,
 			"name": chatName,
@@ -948,9 +908,6 @@ func (h *QueryHandler) generateLocalChatExport(
 			"archive_zip":    absoluteArchivePath,
 			"media_included": options.IncludeMedia,
 		},
-		"preview": map[string]any{
-			"human_txt": truncateLines(humanTextContent, 20),
-		},
 	}
 
 	reportChatExportProgress(report, chatExportProgressSnapshot{
@@ -989,9 +946,6 @@ func (h *QueryHandler) generateLocalChatExport(
 		fmt.Sprintf("llm_json: %s", absoluteLLMJSONPath),
 		fmt.Sprintf("llm_markdown: %s", absoluteLLMMarkdownPath),
 		fmt.Sprintf("archive_zip: %s", absoluteArchivePath),
-		"",
-		"preview:",
-		truncateLines(humanTextContent, 12),
 	}, "\n")
 
 	return resultPayload, fallback, nil
@@ -1172,6 +1126,146 @@ func buildPreparedMessageLookup(messages []chatExportPreparedMessage) map[string
 	return lookup
 }
 
+func buildExportMarkdownHeader(chatName, chatJID string, messageCount int, loc *time.Location) []string {
+	generatedAt := time.Now()
+	if loc != nil {
+		generatedAt = generatedAt.In(loc)
+	}
+
+	timezone := "UTC"
+	if loc != nil {
+		timezone = loc.String()
+	}
+
+	return []string{
+		"# Chat Export for LLM",
+		fmt.Sprintf("chat: %s | %s", chatName, chatJID),
+		fmt.Sprintf("generated: %s (%s)", generatedAt.Format(time.RFC3339), timezone),
+		fmt.Sprintf("messages_exported: %d", messageCount),
+		"",
+	}
+}
+
+func buildExportSenderDirectory(messages []chatExportPreparedMessage) (map[string]string, []string) {
+	aliases := map[string]string{}
+	usedAliases := map[string]int{}
+	entries := make([]string, 0)
+
+	for _, prepared := range messages {
+		key := exportSenderKey(prepared.Sender)
+		if key == "" {
+			continue
+		}
+		if _, ok := aliases[key]; ok {
+			continue
+		}
+
+		alias := strings.TrimSpace(prepared.Sender["label"])
+		if alias == "" {
+			alias = strings.TrimSpace(prepared.Sender["display_name"])
+		}
+		if alias == "" {
+			alias = strings.TrimSpace(prepared.Sender["phone"])
+		}
+		if alias == "" {
+			alias = strings.TrimSpace(prepared.Sender["jid"])
+		}
+		if alias == "" {
+			alias = "desconhecido"
+		}
+
+		usedAliases[alias]++
+		if usedAliases[alias] > 1 {
+			alias = fmt.Sprintf("%s#%d", alias, usedAliases[alias])
+		}
+		aliases[key] = alias
+
+		identity := strings.TrimSpace(prepared.Sender["identity"])
+		if identity == "" {
+			identity = strings.TrimSpace(prepared.Sender["jid"])
+		}
+		if identity != "" && identity != alias {
+			entries = append(entries, fmt.Sprintf("%s=%s", alias, identity))
+		} else {
+			entries = append(entries, alias)
+		}
+	}
+
+	if len(entries) == 0 {
+		return aliases, nil
+	}
+
+	return aliases, []string{
+		"senders: " + strings.Join(entries, "; "),
+		"",
+	}
+}
+
+func exportSenderKey(sender map[string]string) string {
+	for _, field := range []string{"identity", "jid", "label"} {
+		if value := strings.TrimSpace(sender[field]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func exportSenderAlias(aliases map[string]string, sender map[string]string) string {
+	if alias := strings.TrimSpace(aliases[exportSenderKey(sender)]); alias != "" {
+		return alias
+	}
+	if alias := strings.TrimSpace(sender["label"]); alias != "" {
+		return alias
+	}
+	return "desconhecido"
+}
+
+func formatExportMarkdownTextLine(
+	prepared chatExportPreparedMessage,
+	senderAlias string,
+	text string,
+	reply *chatExportReplyReference,
+) string {
+	line := fmt.Sprintf("%d [%s] %s: %s", prepared.Seq, prepared.LocalCompact, senderAlias, text)
+	if replySuffix := formatExportReplyMarkdownSuffix(reply); replySuffix != "" {
+		line += " " + replySuffix
+	}
+	return line
+}
+
+func formatExportMarkdownMediaLine(
+	prepared chatExportPreparedMessage,
+	senderAlias string,
+	reply *chatExportReplyReference,
+) string {
+	mediaPath := getPreparedMediaRecordString(prepared.Media, "archive_path")
+	if mediaPath == "" && prepared.Media != nil {
+		mediaPath = prepared.Media.ArchivePath
+	}
+	status := getPreparedMediaRecordString(prepared.Media, "download_status")
+	if status == "" {
+		status = "not_requested"
+	}
+
+	line := fmt.Sprintf(
+		"%d [%s] %s: [media ref=%s type=%s path=%s status=%s]",
+		prepared.Seq,
+		prepared.LocalCompact,
+		senderAlias,
+		prepared.Media.Ref,
+		prepared.MediaType,
+		mediaPath,
+		status,
+	)
+	if prepared.Text != "" {
+		line += " " + prepared.Text
+	}
+	if replySuffix := formatExportReplyMarkdownSuffix(reply); replySuffix != "" {
+		line += " " + replySuffix
+	}
+	return line
+}
+
 func buildExportSenderLookup(ctx context.Context) (map[string]string, string) {
 	result := map[string]string{}
 	client := whatsapp.ClientFromContext(ctx)
@@ -1348,7 +1442,7 @@ func formatExportReplyHumanSuffix(reply *chatExportReplyReference) string {
 		parts = append(parts, "remetente="+reply.SenderIdentity)
 	}
 	if reply.QuotedText != "" {
-		parts = append(parts, "citado="+truncateRunes(reply.QuotedText, 140))
+		parts = append(parts, "citado="+reply.QuotedText)
 	}
 	if len(parts) == 0 {
 		return ""
@@ -1356,27 +1450,27 @@ func formatExportReplyHumanSuffix(reply *chatExportReplyReference) string {
 	return " | " + strings.Join(parts, " | ")
 }
 
-func formatExportReplyMarkdownLines(reply *chatExportReplyReference) []string {
+func formatExportReplyMarkdownSuffix(reply *chatExportReplyReference) string {
 	if reply == nil {
-		return nil
+		return ""
 	}
-
-	line := "   reply_to:"
 	if reply.FoundInExport && reply.ExportedSeq > 0 {
-		line += fmt.Sprintf(" seq=%d", reply.ExportedSeq)
+		return fmt.Sprintf("reply=%d", reply.ExportedSeq)
 	}
 	if reply.MessageID != "" {
-		line += " message_id=" + reply.MessageID
+		return "reply_id=" + reply.MessageID
 	}
-	if reply.SenderIdentity != "" {
-		line += " sender=" + reply.SenderIdentity
-	}
+	return ""
+}
 
-	lines := []string{line}
-	if reply.QuotedText != "" {
-		lines = append(lines, "   reply_text: "+truncateRunes(reply.QuotedText, 260))
+func formatExportReplyMarkdownDetailLines(reply *chatExportReplyReference) []string {
+	if reply == nil || (reply.FoundInExport && reply.ExportedSeq > 0) {
+		return nil
 	}
-	return lines
+	if reply.QuotedText == "" {
+		return nil
+	}
+	return []string{"   reply_text: " + reply.QuotedText}
 }
 
 func (h *QueryHandler) includeMediaInExport(
@@ -1609,6 +1703,10 @@ func parseStoredMessageTime(raw string) time.Time {
 
 func formatExportHumanTimestamp(ts time.Time) string {
 	return ts.Format("02-01-06:15:04:05")
+}
+
+func formatExportCompactTimestamp(ts time.Time) string {
+	return ts.Format("02/01/06 15:04:05")
 }
 
 func writeExportFile(path string, content string) error {
