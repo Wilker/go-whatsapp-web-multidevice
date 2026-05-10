@@ -40,6 +40,16 @@ func (f fakeMessageScanner) Scan(dest ...any) error {
 				return fmt.Errorf("unexpected type %T for *sql.NullString at index %d", value, i)
 			}
 			*target = sql.NullString{String: typed, Valid: true}
+		case *sql.NullTime:
+			if value == nil {
+				*target = sql.NullTime{}
+				continue
+			}
+			typed, ok := value.(time.Time)
+			if !ok {
+				return fmt.Errorf("unexpected type %T for *sql.NullTime at index %d", value, i)
+			}
+			*target = sql.NullTime{Time: typed, Valid: true}
 		case *time.Time:
 			typed, ok := value.(time.Time)
 			if !ok {
@@ -95,10 +105,12 @@ func TestScanMessageAcceptsNullOptionalTextColumns(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		[]byte{1, 2, 3},
 		[]byte{4, 5, 6},
 		[]byte{7, 8, 9},
 		uint64(42),
+		nil,
 		now,
 		now,
 	}})
@@ -107,8 +119,12 @@ func TestScanMessageAcceptsNullOptionalTextColumns(t *testing.T) {
 	}
 
 	if message.Content != "" || message.MediaType != "" || message.Filename != "" || message.URL != "" || message.DirectPath != "" ||
+		message.LocalMediaPath != "" ||
 		message.ReplyToMessageID != "" || message.QuotedText != "" || message.QuotedSender != "" {
 		t.Fatalf("expected nullable text fields to be normalized to empty strings, got %+v", message)
+	}
+	if !message.DeletedAt.IsZero() {
+		t.Fatalf("expected deleted_at to default to zero, got %+v", message)
 	}
 }
 
@@ -170,6 +186,7 @@ func TestStoreMessagePreservesExistingDirectPathOnEmptyUpdate(t *testing.T) {
 		Timestamp:        now,
 		MediaType:        "audio",
 		DirectPath:       "/mms/audio/original",
+		LocalMediaPath:   "statics/media/120363424157959439/2026-03-10/original.ogg",
 		ReplyToMessageID: "quoted-1",
 		QuotedText:       "Mensagem anterior",
 		QuotedSender:     "5511777777777@s.whatsapp.net",
@@ -200,6 +217,9 @@ func TestStoreMessagePreservesExistingDirectPathOnEmptyUpdate(t *testing.T) {
 	if stored.DirectPath != original.DirectPath {
 		t.Fatalf("expected direct path %q to be preserved, got %q", original.DirectPath, stored.DirectPath)
 	}
+	if stored.LocalMediaPath != original.LocalMediaPath {
+		t.Fatalf("expected local media path %q to be preserved, got %q", original.LocalMediaPath, stored.LocalMediaPath)
+	}
 	if stored.ReplyToMessageID != original.ReplyToMessageID || stored.QuotedText != original.QuotedText || stored.QuotedSender != original.QuotedSender {
 		t.Fatalf("expected reply metadata to be preserved, got %+v", stored)
 	}
@@ -217,6 +237,7 @@ func TestStoreMessagesBatchPreservesExistingDirectPathOnEmptyUpdate(t *testing.T
 		Timestamp:        now,
 		MediaType:        "document",
 		DirectPath:       "/mms/document/original",
+		LocalMediaPath:   "statics/media/120363424157959439/2026-03-10/original.pdf",
 		ReplyToMessageID: "quoted-2",
 		QuotedText:       "Contexto batch",
 		QuotedSender:     "5511666666666@s.whatsapp.net",
@@ -247,8 +268,46 @@ func TestStoreMessagesBatchPreservesExistingDirectPathOnEmptyUpdate(t *testing.T
 	if stored.DirectPath != original.DirectPath {
 		t.Fatalf("expected direct path %q to be preserved after batch update, got %q", original.DirectPath, stored.DirectPath)
 	}
+	if stored.LocalMediaPath != original.LocalMediaPath {
+		t.Fatalf("expected local media path %q to be preserved after batch update, got %q", original.LocalMediaPath, stored.LocalMediaPath)
+	}
 	if stored.ReplyToMessageID != original.ReplyToMessageID || stored.QuotedText != original.QuotedText || stored.QuotedSender != original.QuotedSender {
 		t.Fatalf("expected reply metadata to be preserved after batch update, got %+v", stored)
+	}
+}
+
+func TestDeleteMessageByDeviceSoftDeletesMessage(t *testing.T) {
+	repo := newTestSQLiteRepository(t)
+	now := time.Now()
+
+	original := &domainChatStorage.Message{
+		ID:        "msg-soft-delete",
+		ChatJID:   "120363424157959439@g.us",
+		DeviceID:  "5511999999999@s.whatsapp.net",
+		Sender:    "5511888888888@s.whatsapp.net",
+		Content:   "Mensagem que deve continuar armazenada",
+		Timestamp: now,
+	}
+	if err := repo.StoreMessage(original); err != nil {
+		t.Fatalf("StoreMessage(original) unexpected error: %v", err)
+	}
+
+	if err := repo.DeleteMessageByDevice(original.DeviceID, original.ID, original.ChatJID); err != nil {
+		t.Fatalf("DeleteMessageByDevice() unexpected error: %v", err)
+	}
+
+	stored, err := repo.GetMessageByIDByDevice(original.DeviceID, original.ID)
+	if err != nil {
+		t.Fatalf("GetMessageByIDByDevice() unexpected error: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected soft-deleted message to remain in storage, got nil")
+	}
+	if stored.DeletedAt.IsZero() {
+		t.Fatalf("expected deleted_at to be set, got %+v", stored)
+	}
+	if stored.Content != original.Content {
+		t.Fatalf("expected original content to be preserved, got %q", stored.Content)
 	}
 }
 

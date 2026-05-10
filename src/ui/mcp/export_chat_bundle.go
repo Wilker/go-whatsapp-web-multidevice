@@ -481,6 +481,7 @@ func (h *QueryHandler) generateLocalChatExport(
 					"archive_path":             archivePath,
 					"filename_source":          filenameSource,
 					"remote_url":               msg.URL,
+					"local_media_path":         msg.LocalMediaPath,
 					"size_bytes":               msg.FileLength,
 					"included_in_bundle":       false,
 					"download_status":          "not_requested",
@@ -650,6 +651,9 @@ func (h *QueryHandler) generateLocalChatExport(
 			"from_me": prepared.Message.IsFromMe,
 			"text":    prepared.Text,
 		}
+		if strings.TrimSpace(prepared.Message.DeletedAt) != "" {
+			messageRecord["deleted_at"] = prepared.Message.DeletedAt
+		}
 		replyReference := buildExportReplyReference(prepared.Message, referencedMessages)
 		if replyReference != nil {
 			messageRecord["reply_to"] = buildExportReplyRecord(replyReference)
@@ -670,6 +674,9 @@ func (h *QueryHandler) generateLocalChatExport(
 			)
 			if replySuffix := formatExportReplyHumanSuffix(replyReference); replySuffix != "" {
 				humanLine += replySuffix
+			}
+			if exportMessageDeleted(prepared) {
+				humanLine += " | apagada"
 			}
 			humanLines = append(humanLines, humanLine)
 			markdownLines = append(markdownLines, formatExportMarkdownTextLine(prepared, senderAlias, text, replyReference))
@@ -705,6 +712,9 @@ func (h *QueryHandler) generateLocalChatExport(
 		}
 		if replySuffix := formatExportReplyHumanSuffix(replyReference); replySuffix != "" {
 			humanLine += replySuffix
+		}
+		if exportMessageDeleted(prepared) {
+			humanLine += " | apagada"
 		}
 		humanLines = append(humanLines, humanLine)
 
@@ -1226,6 +1236,9 @@ func formatExportMarkdownTextLine(
 	text string,
 	reply *chatExportReplyReference,
 ) string {
+	if exportMessageDeleted(prepared) {
+		text = "[apagada] " + text
+	}
 	line := fmt.Sprintf("%d [%s] %s: %s", prepared.Seq, prepared.LocalCompact, senderAlias, text)
 	if replySuffix := formatExportReplyMarkdownSuffix(reply); replySuffix != "" {
 		line += " " + replySuffix
@@ -1257,6 +1270,9 @@ func formatExportMarkdownMediaLine(
 		mediaPath,
 		status,
 	)
+	if exportMessageDeleted(prepared) {
+		line += " [apagada]"
+	}
 	if prepared.Text != "" {
 		line += " " + prepared.Text
 	}
@@ -1264,6 +1280,10 @@ func formatExportMarkdownMediaLine(
 		line += " " + replySuffix
 	}
 	return line
+}
+
+func exportMessageDeleted(prepared chatExportPreparedMessage) bool {
+	return strings.TrimSpace(prepared.Message.DeletedAt) != ""
 }
 
 func buildExportSenderLookup(ctx context.Context) (map[string]string, string) {

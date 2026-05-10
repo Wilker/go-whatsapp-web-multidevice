@@ -176,6 +176,11 @@ func (service serviceMessage) RevokeMessage(ctx context.Context, request domainM
 
 	response.MessageID = ts.ID
 	response.Status = fmt.Sprintf("Revoke success %s (server timestamp: %s)", request.Phone, ts.Timestamp)
+	if service.chatStorageRepo != nil {
+		if deleteErr := service.chatStorageRepo.DeleteMessage(request.MessageID, dataWaRecipient.String()); deleteErr != nil {
+			logrus.Warnf("Failed to mark revoked message %s as deleted in chat storage: %v", request.MessageID, deleteErr)
+		}
+	}
 	return response, nil
 }
 
@@ -215,6 +220,11 @@ func (service serviceMessage) DeleteMessage(ctx context.Context, request domainM
 
 	if err = client.SendAppState(ctx, patchInfo); err != nil {
 		return err
+	}
+	if service.chatStorageRepo != nil {
+		if deleteErr := service.chatStorageRepo.DeleteMessage(request.MessageID, dataWaRecipient.String()); deleteErr != nil {
+			logrus.Warnf("Failed to mark deleted message %s as deleted in chat storage: %v", request.MessageID, deleteErr)
+		}
 	}
 	return nil
 }
@@ -339,6 +349,20 @@ func (service serviceMessage) downloadMediaWithProfile(
 	response.OutputDirUsed = baseDir
 	response.PathModeUsed = pathModeUsed
 
+	if response, ok := buildLocalMediaDownloadResponse(response, message); ok {
+		logrus.Info(map[string]any{
+			"message_id": request.MessageID,
+			"phone":      request.Phone,
+			"chat":       dataWaRecipient.String(),
+			"media_type": response.MediaType,
+			"file_path":  response.FilePath,
+			"file_size":  response.FileSize,
+			"recovery":   response.RecoveryMethod,
+			"source":     "local_media_path",
+		})
+		return response, nil
+	}
+
 	err = os.MkdirAll(downloadDir, 0755)
 	if err != nil {
 		return response, fmt.Errorf("failed to create directory: %v", err)
@@ -381,6 +405,13 @@ func (service serviceMessage) downloadMediaWithProfile(
 		response.FileSize = fileInfo.Size()
 	}
 
+	if service.chatStorageRepo != nil {
+		message.LocalMediaPath = response.FilePath
+		if storeErr := service.chatStorageRepo.StoreMessage(message); storeErr != nil {
+			logrus.WithError(storeErr).Warnf("Failed to persist local media path for message %s", message.ID)
+		}
+	}
+
 	logrus.Info(map[string]any{
 		"message_id": request.MessageID,
 		"phone":      request.Phone,
@@ -392,6 +423,36 @@ func (service serviceMessage) downloadMediaWithProfile(
 	})
 
 	return response, nil
+}
+
+func buildLocalMediaDownloadResponse(
+	response domainMessage.DownloadMediaResponse,
+	message *domainChatStorage.Message,
+) (domainMessage.DownloadMediaResponse, bool) {
+	if message == nil {
+		return response, false
+	}
+
+	localPath := strings.TrimSpace(message.LocalMediaPath)
+	if localPath == "" {
+		return response, false
+	}
+
+	fileInfo, err := os.Stat(localPath)
+	if err != nil || fileInfo == nil || fileInfo.IsDir() {
+		if err != nil && !os.IsNotExist(err) {
+			logrus.WithError(err).Warnf("Stored local media path for message %s is not usable: %s", message.ID, localPath)
+		}
+		return response, false
+	}
+
+	response.Status = fmt.Sprintf("Media already available locally at %s", localPath)
+	response.Filename = filepath.Base(localPath)
+	response.FilePath = localPath
+	response.FileSize = fileInfo.Size()
+	response.RecoveryMethod = domainMessage.MediaRecoveryMethodLocalFile
+	response.FailureReason = domainMessage.MediaFailureReasonNone
+	return response, true
 }
 
 func (service serviceMessage) RecoverMediaBatch(

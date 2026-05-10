@@ -164,6 +164,11 @@ func (service serviceChat) GetChatMessages(ctx context.Context, request domainCh
 	// Convert entities to domain objects
 	messageInfos := make([]domainChat.MessageInfo, 0, len(messages))
 	for _, message := range messages {
+		deletedAt := ""
+		if !message.DeletedAt.IsZero() {
+			deletedAt = message.DeletedAt.Format(time.RFC3339)
+		}
+
 		messageInfo := domainChat.MessageInfo{
 			ID:               message.ID,
 			ChatJID:          message.ChatJID,
@@ -174,10 +179,12 @@ func (service serviceChat) GetChatMessages(ctx context.Context, request domainCh
 			MediaType:        message.MediaType,
 			Filename:         message.Filename,
 			URL:              message.URL,
+			LocalMediaPath:   message.LocalMediaPath,
 			ReplyToMessageID: message.ReplyToMessageID,
 			QuotedText:       message.QuotedText,
 			QuotedSenderJID:  message.QuotedSender,
 			FileLength:       message.FileLength,
+			DeletedAt:        deletedAt,
 			CreatedAt:        message.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:        message.UpdatedAt.Format(time.RFC3339),
 		}

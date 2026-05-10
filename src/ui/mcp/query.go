@@ -901,18 +901,20 @@ func buildChatMessagesResultPayload(resp domainChat.GetChatMessagesResponse) map
 	messages := make([]map[string]any, 0, len(resp.Data))
 	for _, msg := range resp.Data {
 		messages = append(messages, map[string]any{
-			"message_id":  msg.ID,
-			"chat_jid":    msg.ChatJID,
-			"sender_jid":  msg.SenderJID,
-			"from_me":     msg.IsFromMe,
-			"timestamp":   msg.Timestamp,
-			"content":     msg.Content,
-			"media_type":  msg.MediaType,
-			"filename":    msg.Filename,
-			"media_url":   msg.URL,
-			"file_length": msg.FileLength,
-			"created_at":  msg.CreatedAt,
-			"updated_at":  msg.UpdatedAt,
+			"message_id":       msg.ID,
+			"chat_jid":         msg.ChatJID,
+			"sender_jid":       msg.SenderJID,
+			"from_me":          msg.IsFromMe,
+			"timestamp":        msg.Timestamp,
+			"content":          msg.Content,
+			"media_type":       msg.MediaType,
+			"filename":         msg.Filename,
+			"media_url":        msg.URL,
+			"media_local_path": msg.LocalMediaPath,
+			"file_length":      msg.FileLength,
+			"deleted_at":       msg.DeletedAt,
+			"created_at":       msg.CreatedAt,
+			"updated_at":       msg.UpdatedAt,
 		})
 	}
 

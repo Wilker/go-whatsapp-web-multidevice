@@ -66,6 +66,7 @@ const (
 	MediaRecoveryMethodDirectURL        = "direct_url"
 	MediaRecoveryMethodStoredDirectPath = "stored_direct_path"
 	MediaRecoveryMethodMediaRetry       = "media_retry"
+	MediaRecoveryMethodLocalFile        = "local_file"
 )
 
 const (

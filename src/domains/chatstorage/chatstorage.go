@@ -27,6 +27,7 @@ type Message struct {
 	Filename         string    `db:"filename"`
 	URL              string    `db:"url"`
 	DirectPath       string    `db:"direct_path"`
+	LocalMediaPath   string    `db:"local_media_path"`
 	ReplyToMessageID string    `db:"reply_to_message_id"`
 	QuotedText       string    `db:"quoted_text"`
 	QuotedSender     string    `db:"quoted_sender"`
@@ -34,22 +35,24 @@ type Message struct {
 	FileSHA256       []byte    `db:"file_sha256"`
 	FileEncSHA256    []byte    `db:"file_enc_sha256"`
 	FileLength       uint64    `db:"file_length"`
+	DeletedAt        time.Time `db:"deleted_at"`
 	CreatedAt        time.Time `db:"created_at"`
 	UpdatedAt        time.Time `db:"updated_at"`
 }
 
 // MediaInfo represents downloadable media information
 type MediaInfo struct {
-	MessageID     string
-	ChatJID       string
-	MediaType     string
-	Filename      string
-	URL           string
-	DirectPath    string
-	MediaKey      []byte
-	FileSHA256    []byte
-	FileEncSHA256 []byte
-	FileLength    uint64
+	MessageID      string
+	ChatJID        string
+	MediaType      string
+	Filename       string
+	URL            string
+	DirectPath     string
+	LocalMediaPath string
+	MediaKey       []byte
+	FileSHA256     []byte
+	FileEncSHA256  []byte
+	FileLength     uint64
 }
 
 // DeviceRecord tracks a registered device for persistence purposes.

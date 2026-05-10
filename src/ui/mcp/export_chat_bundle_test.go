@@ -461,6 +461,14 @@ func TestGenerateLocalChatExportUsesCompactMarkdownWithoutTruncation(t *testing.
 				Timestamp: "2026-03-09T11:13:30-03:00",
 			},
 			{
+				ID:        "msg-deleted",
+				ChatJID:   "120363424157959439@g.us",
+				SenderJID: "558896420094@s.whatsapp.net",
+				Content:   "Mensagem removida no WhatsApp",
+				Timestamp: "2026-03-09T11:13:45-03:00",
+				DeletedAt: "2026-03-09T11:15:00-03:00",
+			},
+			{
 				ID:               "msg-missing-reply",
 				ChatJID:          "120363424157959439@g.us",
 				SenderJID:        "558896420094@s.whatsapp.net",
@@ -501,12 +509,34 @@ func TestGenerateLocalChatExportUsesCompactMarkdownWithoutTruncation(t *testing.
 	if !strings.Contains(markdown, longText) {
 		t.Fatalf("expected full message text without truncation, got %s", markdown)
 	}
+	deletedTimestamp := formatExportCompactTimestamp(parseStoredMessageTime("2026-03-09T11:13:45-03:00").In(time.Now().Location()))
+	if !strings.Contains(markdown, "3 ["+deletedTimestamp+"] 558896420094: [apagada] Mensagem removida no WhatsApp") {
+		t.Fatalf("expected deleted message marker in compact markdown, got %s", markdown)
+	}
 	missingReplyTimestamp := formatExportCompactTimestamp(parseStoredMessageTime("2026-03-09T11:14:00-03:00").In(time.Now().Location()))
-	if !strings.Contains(markdown, "3 ["+missingReplyTimestamp+"] 558896420094: Resposta para mensagem fora do recorte reply_id=missing-root") {
+	if !strings.Contains(markdown, "4 ["+missingReplyTimestamp+"] 558896420094: Resposta para mensagem fora do recorte reply_id=missing-root") {
 		t.Fatalf("expected missing reply id in compact line, got %s", markdown)
 	}
 	if !strings.Contains(markdown, "reply_text: "+longReplyText) {
 		t.Fatalf("expected full missing reply text without truncation, got %s", markdown)
+	}
+
+	llmJSONPath := files["llm_json"].(string)
+	rawJSON, err := os.ReadFile(llmJSONPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) unexpected error: %v", llmJSONPath, err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rawJSON, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() unexpected error: %v", err)
+	}
+	messages := payload["messages"].([]any)
+	deletedMessage := messages[2].(map[string]any)
+	if _, ok := deletedMessage["is_deleted"]; ok {
+		t.Fatalf("expected JSON export to omit redundant is_deleted flag, got %#v", deletedMessage)
+	}
+	if deletedMessage["deleted_at"] != "2026-03-09T11:15:00-03:00" {
+		t.Fatalf("expected JSON export to preserve deleted_at, got %#v", deletedMessage["deleted_at"])
 	}
 }
 

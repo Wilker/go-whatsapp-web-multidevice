@@ -80,6 +80,55 @@ func TestBuildStoredDownloadableMessageUsesDirectPath(t *testing.T) {
 	}
 }
 
+func TestBuildLocalMediaDownloadResponseUsesStoredFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "media.jpg")
+	if err := os.WriteFile(localPath, []byte("image-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	response, ok := buildLocalMediaDownloadResponse(domainMessage.DownloadMediaResponse{
+		MessageID:      "MSG123",
+		MediaType:      "image",
+		OutputDirUsed:  "statics/media",
+		PathModeUsed:   domainMessage.MediaDownloadPathModeBase,
+		RecoveryMethod: domainMessage.MediaRecoveryMethodNone,
+	}, &domainChatStorage.Message{
+		ID:             "MSG123",
+		MediaType:      "image",
+		LocalMediaPath: localPath,
+	})
+	if !ok {
+		t.Fatal("expected stored local media path to be reusable")
+	}
+	if response.FilePath != localPath {
+		t.Fatalf("expected file path %q, got %q", localPath, response.FilePath)
+	}
+	if response.Filename != "media.jpg" {
+		t.Fatalf("expected filename media.jpg, got %q", response.Filename)
+	}
+	if response.FileSize != int64(len("image-bytes")) {
+		t.Fatalf("expected file size %d, got %d", len("image-bytes"), response.FileSize)
+	}
+	if response.RecoveryMethod != domainMessage.MediaRecoveryMethodLocalFile {
+		t.Fatalf("expected recovery method %q, got %q", domainMessage.MediaRecoveryMethodLocalFile, response.RecoveryMethod)
+	}
+	if response.FailureReason != domainMessage.MediaFailureReasonNone {
+		t.Fatalf("expected empty failure reason, got %q", response.FailureReason)
+	}
+}
+
+func TestBuildLocalMediaDownloadResponseIgnoresMissingFile(t *testing.T) {
+	response, ok := buildLocalMediaDownloadResponse(domainMessage.DownloadMediaResponse{}, &domainChatStorage.Message{
+		ID:             "MSG123",
+		MediaType:      "image",
+		LocalMediaPath: filepath.Join(t.TempDir(), "missing.jpg"),
+	})
+	if ok {
+		t.Fatalf("expected missing local media path to be ignored, got %+v", response)
+	}
+}
+
 func TestIsRetryableMediaDownloadError(t *testing.T) {
 	retryable := []error{
 		whatsmeow.ErrMediaDownloadFailedWith403,

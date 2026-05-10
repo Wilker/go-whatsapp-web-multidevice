@@ -65,10 +65,12 @@ type MessageInfo struct {
 	MediaType        string `json:"media_type"`
 	Filename         string `json:"filename"`
 	URL              string `json:"url"`
+	LocalMediaPath   string `json:"local_media_path"`
 	ReplyToMessageID string `json:"reply_to_message_id"`
 	QuotedText       string `json:"quoted_text"`
 	QuotedSenderJID  string `json:"quoted_sender_jid"`
 	FileLength       uint64 `json:"file_length"`
+	DeletedAt        string `json:"deleted_at"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
 }
