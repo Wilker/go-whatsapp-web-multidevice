@@ -15,6 +15,7 @@ import (
 	domainUser "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/user"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/utils"
 	mcpHelpers "github.com/aldinokemal/go-whatsapp-web-multidevice/ui/mcp/helpers"
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/validations"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -97,7 +98,7 @@ func (h *QueryHandler) toolListChats() mcp.Tool {
 			mcp.DefaultNumber(0),
 		),
 		mcp.WithString("search",
-			mcp.Description("Filter chats whose name contains this text."),
+			mcp.Description("Filter chats whose stored chat name, contact name, or group name contains this text."),
 		),
 		mcp.WithBoolean("has_media",
 			mcp.Description("If true, return only chats that contain media messages."),
@@ -130,14 +131,24 @@ func (h *QueryHandler) handleListChats(ctx context.Context, request mcp.CallTool
 		Search:   request.GetString("search", ""),
 		HasMedia: hasMedia,
 	}
+	if err := validations.ValidateListChats(ctx, &req); err != nil {
+		return nil, err
+	}
 
-	resp, err := h.chatService.ListChats(ctx, req)
+	contactNames := h.chatContactNames(ctx)
+	groupNames := h.chatGroupNames(ctx)
+	visibleNames := chatVisibleNames{
+		contactNames: contactNames,
+		groupNames:   groupNames,
+	}
+
+	resp, err := h.listChats(ctx, req, visibleNames)
 	if err != nil {
 		return nil, err
 	}
 
-	fallback := buildListChatsFallback(resp, req)
-	resultPayload := buildChatsResultPayload(resp)
+	fallback := buildListChatsFallback(resp, req, visibleNames)
+	resultPayload := buildChatsResultPayload(resp, visibleNames)
 	return newStandardToolResult(
 		"whatsapp_list_chats",
 		"success",
@@ -147,7 +158,182 @@ func (h *QueryHandler) handleListChats(ctx context.Context, request mcp.CallTool
 	), nil
 }
 
-func buildListChatsFallback(resp domainChat.ListChatsResponse, req domainChat.ListChatsRequest) string {
+func (h *QueryHandler) chatContactNames(ctx context.Context) (contactNames map[string]string) {
+	if h.userService == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			contactNames = nil
+		}
+	}()
+
+	resp, err := h.userService.MyListContacts(ctx)
+	if err != nil {
+		return nil
+	}
+
+	return buildContactNameMap(resp)
+}
+
+func (h *QueryHandler) chatGroupNames(ctx context.Context) (groupNames map[string]string) {
+	if h.userService == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			groupNames = nil
+		}
+	}()
+
+	resp, err := h.userService.MyListGroups(ctx)
+	if err != nil {
+		return nil
+	}
+
+	return buildGroupNameMap(resp)
+}
+
+func (h *QueryHandler) listChats(ctx context.Context, req domainChat.ListChatsRequest, visibleNames chatVisibleNames) (domainChat.ListChatsResponse, error) {
+	if strings.TrimSpace(req.Search) == "" {
+		return h.chatService.ListChats(ctx, req)
+	}
+
+	const pageSize = 100
+	allReq := req
+	allReq.Search = ""
+	allReq.Offset = 0
+	allReq.Limit = pageSize
+
+	allChats := make([]domainChat.ChatInfo, 0)
+	for {
+		pageResp, err := h.chatService.ListChats(ctx, allReq)
+		if err != nil {
+			return domainChat.ListChatsResponse{}, err
+		}
+
+		allChats = append(allChats, pageResp.Data...)
+		totalFetched := len(allChats)
+		totalAvailable := pageResp.Pagination.Total
+
+		if len(pageResp.Data) == 0 || totalFetched >= totalAvailable || len(pageResp.Data) < pageSize {
+			break
+		}
+
+		allReq.Offset = totalFetched
+	}
+
+	filtered := filterChatsByVisibleName(allChats, req.Search, visibleNames)
+	return paginateChats(filtered, req), nil
+}
+
+func buildContactNameMap(resp domainUser.MyListContactsResponse) map[string]string {
+	contactNames := make(map[string]string, len(resp.Data))
+	for _, contact := range resp.Data {
+		name := strings.TrimSpace(contact.Name)
+		if name == "" {
+			continue
+		}
+
+		contactNames[contact.JID.String()] = name
+		contactNames[contact.JID.ToNonAD().String()] = name
+	}
+	return contactNames
+}
+
+func buildGroupNameMap(resp domainUser.MyListGroupsResponse) map[string]string {
+	groupNames := make(map[string]string, len(resp.Data))
+	for _, group := range resp.Data {
+		name := strings.TrimSpace(group.GroupName.Name)
+		if name == "" {
+			continue
+		}
+
+		groupNames[group.JID.String()] = name
+		groupNames[group.JID.ToNonAD().String()] = name
+	}
+	return groupNames
+}
+
+type chatVisibleNames struct {
+	contactNames map[string]string
+	groupNames   map[string]string
+}
+
+func (n chatVisibleNames) contactName(jid string) string {
+	return strings.TrimSpace(n.contactNames[jid])
+}
+
+func (n chatVisibleNames) groupName(jid string) string {
+	return strings.TrimSpace(n.groupNames[jid])
+}
+
+func (n chatVisibleNames) displayName(chat domainChat.ChatInfo) string {
+	if groupName := n.groupName(chat.JID); groupName != "" {
+		return groupName
+	}
+	if contactName := n.contactName(chat.JID); contactName != "" {
+		return contactName
+	}
+	return normalizedStoredChatName(chat.Name)
+}
+
+func filterChatsByVisibleName(chats []domainChat.ChatInfo, search string, visibleNames chatVisibleNames) []domainChat.ChatInfo {
+	needle := strings.ToLower(strings.TrimSpace(search))
+	if needle == "" {
+		return chats
+	}
+
+	filtered := make([]domainChat.ChatInfo, 0, len(chats))
+	for _, chat := range chats {
+		candidates := []string{
+			normalizedStoredChatName(chat.Name),
+			visibleNames.contactName(chat.JID),
+			visibleNames.groupName(chat.JID),
+		}
+
+		for _, candidate := range candidates {
+			if strings.Contains(strings.ToLower(candidate), needle) {
+				filtered = append(filtered, chat)
+				break
+			}
+		}
+	}
+
+	return filtered
+}
+
+func paginateChats(chats []domainChat.ChatInfo, req domainChat.ListChatsRequest) domainChat.ListChatsResponse {
+	total := len(chats)
+	start := req.Offset
+	if start > total {
+		start = total
+	}
+
+	end := start + req.Limit
+	if end > total {
+		end = total
+	}
+
+	return domainChat.ListChatsResponse{
+		Data: chats[start:end],
+		Pagination: domainChat.PaginationResponse{
+			Limit:  req.Limit,
+			Offset: req.Offset,
+			Total:  total,
+		},
+	}
+}
+
+func normalizedStoredChatName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "(no name)"
+	}
+	return trimmed
+}
+
+func buildListChatsFallback(resp domainChat.ListChatsResponse, req domainChat.ListChatsRequest, visibleNames chatVisibleNames) string {
 	const maxPreview = 10
 
 	totalOnPage := len(resp.Data)
@@ -184,12 +370,23 @@ func buildListChatsFallback(resp domainChat.ListChatsResponse, req domainChat.Li
 
 	for i := 0; i < previewCount; i++ {
 		chat := resp.Data[i]
-		name := strings.TrimSpace(chat.Name)
-		if name == "" {
-			name = "(no name)"
+		name := normalizedStoredChatName(chat.Name)
+		contactName := visibleNames.contactName(chat.JID)
+		groupName := visibleNames.groupName(chat.JID)
+
+		if contactName == "" && groupName == "" {
+			lines = append(lines, fmt.Sprintf("%d. %s | %s", i+1, name, chat.JID))
+			continue
 		}
 
-		lines = append(lines, fmt.Sprintf("%d. %s | %s", i+1, name, chat.JID))
+		line := fmt.Sprintf("%d. %s | %s", i+1, name, chat.JID)
+		if contactName != "" && contactName != name {
+			line += fmt.Sprintf(" | contact_name: %s", contactName)
+		}
+		if groupName != "" && groupName != name {
+			line += fmt.Sprintf(" | group_name: %s", groupName)
+		}
+		lines = append(lines, line)
 	}
 
 	if totalOnPage > previewCount {
@@ -871,17 +1068,21 @@ func buildContactsResultPayload(resp domainUser.MyListContactsResponse) map[stri
 	}
 }
 
-func buildChatsResultPayload(resp domainChat.ListChatsResponse) map[string]any {
+func buildChatsResultPayload(resp domainChat.ListChatsResponse, visibleNames chatVisibleNames) map[string]any {
 	items := make([]map[string]any, 0, len(resp.Data))
 	for _, chat := range resp.Data {
-		name := strings.TrimSpace(chat.Name)
-		if name == "" {
-			name = "(no name)"
-		}
+		name := normalizedStoredChatName(chat.Name)
+		contactName := visibleNames.contactName(chat.JID)
+		groupName := visibleNames.groupName(chat.JID)
+		displayName := visibleNames.displayName(chat)
 
 		items = append(items, map[string]any{
 			"jid":                  chat.JID,
 			"name":                 name,
+			"chat_name":            name,
+			"contact_name":         contactName,
+			"group_name":           groupName,
+			"display_name":         displayName,
 			"archived":             chat.Archived,
 			"last_message_time":    chat.LastMessageTime,
 			"ephemeral_expiration": chat.EphemeralExpiration,
