@@ -3,6 +3,7 @@ package validations
 import (
 	"context"
 	"mime/multipart"
+	"os"
 	"testing"
 
 	domainMessage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/message"
@@ -131,6 +132,7 @@ func TestValidateSendImage(t *testing.T) {
 }
 
 func TestValidateSendFile(t *testing.T) {
+	localFile := mustCreateTempValidationFile(t, "sample-file-*.pdf")
 	file := &multipart.FileHeader{
 		Filename: "sample-image.png",
 		Size:     100,
@@ -156,6 +158,16 @@ func TestValidateSendFile(t *testing.T) {
 			err: nil,
 		},
 		{
+			name: "should success with local file path",
+			args: args{request: domainSend.FileRequest{
+				BaseRequest: domainSend.BaseRequest{
+					Phone: "1728937129312@s.whatsapp.net",
+				},
+				FilePath: &localFile,
+			}},
+			err: nil,
+		},
+		{
 			name: "should error with empty phone",
 			args: args{request: domainSend.FileRequest{
 				BaseRequest: domainSend.BaseRequest{
@@ -173,7 +185,7 @@ func TestValidateSendFile(t *testing.T) {
 				},
 				File: nil,
 			}},
-			err: pkgError.ValidationError("either File or FileURL must be provided"),
+			err: pkgError.ValidationError("either File, FileURL, or FilePath must be provided"),
 		},
 	}
 
@@ -186,6 +198,7 @@ func TestValidateSendFile(t *testing.T) {
 }
 
 func TestValidateSendVideo(t *testing.T) {
+	localVideo := mustCreateTempValidationFile(t, "sample-video-*.mp4")
 	file := &multipart.FileHeader{
 		Filename: "sample-video.mp4",
 		Size:     100,
@@ -214,6 +227,16 @@ func TestValidateSendVideo(t *testing.T) {
 			err: nil,
 		},
 		{
+			name: "should success with local video path",
+			args: args{request: domainSend.VideoRequest{
+				BaseRequest: domainSend.BaseRequest{
+					Phone: "1728937129312@s.whatsapp.net",
+				},
+				VideoPath: &localVideo,
+			}},
+			err: nil,
+		},
+		{
 			name: "should error with empty phone",
 			args: args{request: domainSend.VideoRequest{
 				BaseRequest: domainSend.BaseRequest{
@@ -237,7 +260,7 @@ func TestValidateSendVideo(t *testing.T) {
 				ViewOnce: false,
 				Compress: false,
 			}},
-			err: pkgError.ValidationError("either Video or VideoURL must be provided"),
+			err: pkgError.ValidationError("either Video, VideoURL, or VideoPath must be provided"),
 		},
 		{
 			name: "should error with invalid format video",
@@ -270,7 +293,7 @@ func TestValidateSendVideo(t *testing.T) {
 				ViewOnce: false,
 				Compress: false,
 			}},
-			err: pkgError.ValidationError("either Video or VideoURL must be provided"),
+			err: pkgError.ValidationError("either Video, VideoURL, or VideoPath must be provided"),
 		},
 		{
 			name: "should success with video_url provided",
@@ -617,6 +640,7 @@ func TestValidateSendLocation(t *testing.T) {
 }
 
 func TestValidateSendAudio(t *testing.T) {
+	localAudio := mustCreateTempValidationFile(t, "sample-audio-*.ogg")
 	audio := &multipart.FileHeader{
 		Filename: "sample-audio.mp3",
 		Size:     100,
@@ -642,6 +666,16 @@ func TestValidateSendAudio(t *testing.T) {
 			err: nil,
 		},
 		{
+			name: "should success with local audio path",
+			args: args{request: domainSend.AudioRequest{
+				BaseRequest: domainSend.BaseRequest{
+					Phone: "1728937129312@s.whatsapp.net",
+				},
+				AudioPath: &localAudio,
+			}},
+			err: nil,
+		},
+		{
 			name: "should error with empty phone",
 			args: args{request: domainSend.AudioRequest{
 				BaseRequest: domainSend.BaseRequest{
@@ -659,7 +693,7 @@ func TestValidateSendAudio(t *testing.T) {
 				},
 				Audio: nil,
 			}},
-			err: pkgError.ValidationError("either Audio or AudioURL must be provided"),
+			err: pkgError.ValidationError("either Audio, AudioURL, or AudioPath must be provided"),
 		},
 		{
 			name: "should error with invalid audio type",
@@ -1110,4 +1144,18 @@ func TestValidateSendAudio_WithDuration(t *testing.T) {
 			assert.Equal(t, tt.err, err)
 		})
 	}
+}
+
+func mustCreateTempValidationFile(t *testing.T, pattern string) string {
+	t.Helper()
+
+	file, err := os.CreateTemp(t.TempDir(), pattern)
+	if err != nil {
+		t.Fatalf("CreateTemp() unexpected error: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() unexpected error: %v", err)
+	}
+
+	return file.Name()
 }

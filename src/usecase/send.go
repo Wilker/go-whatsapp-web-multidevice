@@ -385,6 +385,13 @@ func (service serviceSend) SendFile(ctx context.Context, request domainSend.File
 		if err != nil {
 			return response, pkgError.InternalServerError(fmt.Sprintf("failed to download file from URL: %v", err))
 		}
+	} else if request.FilePath != nil && *request.FilePath != "" {
+		localPath := resolveLocalSendPath(*request.FilePath)
+		fileBytes, err = os.ReadFile(localPath)
+		if err != nil {
+			return response, pkgError.InternalServerError(fmt.Sprintf("failed to read local file: %v", err))
+		}
+		fileName = filepath.Base(localPath)
 	} else if request.File != nil {
 		fileBytes = helpers.MultipartFormFileHeaderToBytes(request.File)
 		fileName = request.File.Filename
@@ -592,6 +599,17 @@ func resolveAudioMIME(filename string, audioBytes []byte) string {
 	return detectedMime
 }
 
+func resolveLocalSendPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if strings.HasPrefix(trimmed, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			trimmed = filepath.Join(homeDir, strings.TrimPrefix(trimmed, "~/"))
+		}
+	}
+	return filepath.Clean(trimmed)
+}
+
 // runFFProbe executes ffprobe with the given arguments and returns the output.
 // Returns empty output and error if ffprobe is not available or fails.
 func runFFProbe(args ...string) ([]byte, error) {
@@ -767,6 +785,16 @@ func (service serviceSend) SendVideo(ctx context.Context, request domainSend.Vid
 		if errWrite := os.WriteFile(oriVideoPath, videoBytes, 0644); errWrite != nil {
 			return response, pkgError.InternalServerError(fmt.Sprintf("failed to store downloaded video in server %v", errWrite))
 		}
+	} else if request.VideoPath != nil && *request.VideoPath != "" {
+		localPath := resolveLocalSendPath(*request.VideoPath)
+		videoBytes, errRead := os.ReadFile(localPath)
+		if errRead != nil {
+			return response, pkgError.InternalServerError(fmt.Sprintf("failed to read local video: %v", errRead))
+		}
+		oriVideoPath = fmt.Sprintf("%s/%s", config.PathSendItems, generateUUID+filepath.Base(localPath))
+		if errWrite := os.WriteFile(oriVideoPath, videoBytes, 0644); errWrite != nil {
+			return response, pkgError.InternalServerError(fmt.Sprintf("failed to store local video in server %v", errWrite))
+		}
 	} else if request.Video != nil {
 		// Save uploaded video to server
 		oriVideoPath = fmt.Sprintf("%s/%s", config.PathSendItems, generateUUID+request.Video.Filename)
@@ -776,7 +804,7 @@ func (service serviceSend) SendVideo(ctx context.Context, request domainSend.Vid
 		}
 	} else {
 		// This should not happen due to validation, but guard anyway
-		return response, pkgError.ValidationError("either Video or VideoURL must be provided")
+		return response, pkgError.ValidationError("either Video, VideoURL, or VideoPath must be provided")
 	}
 
 	// Check if ffmpeg is installed
@@ -1133,6 +1161,16 @@ func (service serviceSend) SendAudio(ctx context.Context, request domainSend.Aud
 			deleteTempFile = true
 			audioDuration = getAudioDuration(tempAudioPath)
 		}
+	} else if request.AudioPath != nil && *request.AudioPath != "" {
+		localPath := resolveLocalSendPath(*request.AudioPath)
+		audioBytes, err = os.ReadFile(localPath)
+		if err != nil {
+			return response, pkgError.InternalServerError(fmt.Sprintf("failed to read local audio: %v", err))
+		}
+		audioFilename = filepath.Base(localPath)
+		audioMimeType = resolveAudioMIME(audioFilename, audioBytes)
+		tempAudioPath = localPath
+		audioDuration = getAudioDuration(tempAudioPath)
 	} else if request.Audio != nil {
 		audioBytes = helpers.MultipartFormFileHeaderToBytes(request.Audio)
 		audioMimeType = resolveAudioMIME(request.Audio.Filename, audioBytes)

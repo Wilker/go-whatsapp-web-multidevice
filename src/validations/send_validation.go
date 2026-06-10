@@ -3,7 +3,10 @@ package validations
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
 	domainSend "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/send"
@@ -209,9 +212,9 @@ func ValidateSendFile(ctx context.Context, request domainSend.FileRequest) error
 		return err
 	}
 
-	// Either File or FileURL must be provided
-	if request.File == nil && (request.FileURL == nil || *request.FileURL == "") {
-		return pkgError.ValidationError("either File or FileURL must be provided")
+	// Either File, FileURL, or FilePath must be provided
+	if request.File == nil && isBlankOptionalString(request.FileURL) && isBlankOptionalString(request.FilePath) {
+		return pkgError.ValidationError("either File, FileURL, or FilePath must be provided")
 	}
 
 	if request.File != nil {
@@ -228,6 +231,10 @@ func ValidateSendFile(ctx context.Context, request domainSend.FileRequest) error
 		if err := validation.Validate(*request.FileURL, is.URL); err != nil {
 			return pkgError.ValidationError("FileURL must be a valid URL")
 		}
+	}
+
+	if err := validateLocalSendPath(request.FilePath, "FilePath", config.WhatsappSettingMaxFileSize, "file"); err != nil {
+		return err
 	}
 
 	if err := validateDuration(request.Duration); err != nil {
@@ -252,9 +259,9 @@ func ValidateSendVideo(ctx context.Context, request domainSend.VideoRequest) err
 		return err
 	}
 
-	// Ensure at least one of Video or VideoURL is provided
-	if request.Video == nil && (request.VideoURL == nil || *request.VideoURL == "") {
-		return pkgError.ValidationError("either Video or VideoURL must be provided")
+	// Ensure at least one of Video, VideoURL, or VideoPath is provided
+	if request.Video == nil && isBlankOptionalString(request.VideoURL) && isBlankOptionalString(request.VideoPath) {
+		return pkgError.ValidationError("either Video, VideoURL, or VideoPath must be provided")
 	}
 
 	// If Video file provided perform MIME / size validation
@@ -285,6 +292,10 @@ func ValidateSendVideo(ctx context.Context, request domainSend.VideoRequest) err
 		if err := validation.Validate(*request.VideoURL, is.URL); err != nil {
 			return pkgError.ValidationError("VideoURL must be a valid URL")
 		}
+	}
+
+	if err := validateLocalSendPath(request.VideoPath, "VideoPath", config.WhatsappSettingMaxVideoSize, "video"); err != nil {
+		return err
 	}
 
 	if err := validateDuration(request.Duration); err != nil {
@@ -382,9 +393,9 @@ func ValidateSendAudio(ctx context.Context, request domainSend.AudioRequest) err
 		return err
 	}
 
-	// Ensure at least one of Audio or AudioURL is provided
-	if request.Audio == nil && (request.AudioURL == nil || *request.AudioURL == "") {
-		return pkgError.ValidationError("either Audio or AudioURL must be provided")
+	// Ensure at least one of Audio, AudioURL, or AudioPath is provided
+	if request.Audio == nil && isBlankOptionalString(request.AudioURL) && isBlankOptionalString(request.AudioPath) {
+		return pkgError.ValidationError("either Audio, AudioURL, or AudioPath must be provided")
 	}
 
 	// If Audio file is provided, validate file MIME
@@ -434,6 +445,10 @@ func ValidateSendAudio(ctx context.Context, request domainSend.AudioRequest) err
 		if err := validation.Validate(*request.AudioURL, is.URL); err != nil {
 			return pkgError.ValidationError("AudioURL must be a valid URL")
 		}
+	}
+
+	if err := validateLocalSendPath(request.AudioPath, "AudioPath", 0, "file"); err != nil {
+		return err
 	}
 
 	if err := validateDuration(request.Duration); err != nil {
@@ -510,6 +525,41 @@ func ValidateSendChatPresence(ctx context.Context, request domainSend.ChatPresen
 	// Custom validation for phone number format
 	if err := validatePhoneNumber(request.Phone); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func isBlankOptionalString(value *string) bool {
+	return value == nil || strings.TrimSpace(*value) == ""
+}
+
+func validateLocalSendPath(path *string, fieldName string, maxSize int64, maxSizeLabel string) error {
+	if path == nil {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(*path)
+	if trimmed == "" {
+		return pkgError.ValidationError(fieldName + " cannot be empty")
+	}
+	if strings.HasPrefix(trimmed, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			trimmed = filepath.Join(homeDir, strings.TrimPrefix(trimmed, "~/"))
+		}
+	}
+
+	fileInfo, err := os.Stat(trimmed)
+	if err != nil {
+		return pkgError.ValidationError(fmt.Sprintf("%s must point to an existing file", fieldName))
+	}
+	if fileInfo.IsDir() {
+		return pkgError.ValidationError(fieldName + " must point to a file")
+	}
+	if maxSize > 0 && fileInfo.Size() > maxSize {
+		maxSizeString := humanize.Bytes(uint64(maxSize))
+		return pkgError.ValidationError(fmt.Sprintf("max %s upload is %s, please upload in cloud and send via text if your file is higher than %s", maxSizeLabel, maxSizeString, maxSizeString))
 	}
 
 	return nil

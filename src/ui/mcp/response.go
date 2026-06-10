@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
+	pkgError "github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/error"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -23,6 +25,29 @@ func newStandardToolErrorResult(action, status string, request, result any, summ
 	resultPayload := newStandardToolResult(action, status, request, result, summary)
 	resultPayload.IsError = true
 	return resultPayload
+}
+
+func newStandardToolErrorResultFromError(action string, request any, err error) *mcp.CallToolResult {
+	errorPayload := map[string]any{
+		"message": strings.TrimSpace(err.Error()),
+	}
+
+	var appErr pkgError.GenericError
+	if errors.As(err, &appErr) {
+		errorPayload["code"] = appErr.ErrCode()
+		errorPayload["http_status"] = appErr.StatusCode()
+	}
+
+	summary := fmt.Sprintf("%s failed\nerror: %s", strings.TrimSpace(action), strings.TrimSpace(err.Error()))
+	return newStandardToolErrorResult(
+		action,
+		"failed",
+		request,
+		map[string]any{
+			"error": errorPayload,
+		},
+		summary,
+	)
 }
 
 func newStandardStructuredContent(action, status string, request, result any, summary string) map[string]any {
