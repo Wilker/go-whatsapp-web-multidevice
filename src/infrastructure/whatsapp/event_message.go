@@ -12,7 +12,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
-	pkgError "github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/error"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/utils"
 	"github.com/sirupsen/logrus"
 	"go.mau.fi/whatsmeow/types/events"
@@ -34,8 +34,8 @@ type WebhookEvent struct {
 }
 
 // forwardMessageToWebhook is a helper function to forward message event to webhook url
-func forwardMessageToWebhook(ctx context.Context, client *whatsmeow.Client, evt *events.Message) error {
-	webhookEvent, err := createWebhookEvent(ctx, client, evt)
+func forwardMessageToWebhook(ctx context.Context, client *whatsmeow.Client, evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository) error {
+	webhookEvent, err := createWebhookEvent(ctx, client, evt, chatStorageRepo)
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,7 @@ func forwardMessageToWebhook(ctx context.Context, client *whatsmeow.Client, evt 
 	return forwardPayloadToConfiguredWebhooks(ctx, payload, webhookEvent.Event)
 }
 
-func createWebhookEvent(ctx context.Context, client *whatsmeow.Client, evt *events.Message) (*WebhookEvent, error) {
+func createWebhookEvent(ctx context.Context, client *whatsmeow.Client, evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository) (*WebhookEvent, error) {
 	webhookEvent := &WebhookEvent{
 		Event:   EventTypeMessage,
 		Payload: make(map[string]any),
@@ -62,7 +62,7 @@ func createWebhookEvent(ctx context.Context, client *whatsmeow.Client, evt *even
 	}
 
 	// Determine event type and build payload
-	eventType, payload, err := buildEventPayload(ctx, client, evt)
+	eventType, payload, err := buildEventPayloadWithStorage(ctx, client, evt, chatStorageRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +74,10 @@ func createWebhookEvent(ctx context.Context, client *whatsmeow.Client, evt *even
 }
 
 func buildEventPayload(ctx context.Context, client *whatsmeow.Client, evt *events.Message) (string, map[string]any, error) {
+	return buildEventPayloadWithStorage(ctx, client, evt, nil)
+}
+
+func buildEventPayloadWithStorage(ctx context.Context, client *whatsmeow.Client, evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository) (string, map[string]any, error) {
 	payload := make(map[string]any)
 
 	msg := utils.UnwrapMessage(evt.Message)
@@ -136,7 +140,7 @@ func buildEventPayload(ctx context.Context, client *whatsmeow.Client, evt *event
 	}
 
 	// Add optional fields
-	if err := buildOptionalFields(ctx, client, evt, msg, payload); err != nil {
+	if err := buildOptionalFields(ctx, client, evt, msg, payload, chatStorageRepo); err != nil {
 		return "", nil, err
 	}
 
@@ -211,7 +215,7 @@ func buildMessageBody(ctx context.Context, client *whatsmeow.Client, evt *events
 	return nil
 }
 
-func buildOptionalFields(ctx context.Context, client *whatsmeow.Client, evt *events.Message, msg *waE2E.Message, payload map[string]any) error {
+func buildOptionalFields(ctx context.Context, client *whatsmeow.Client, evt *events.Message, msg *waE2E.Message, payload map[string]any, chatStorageRepo domainChatStorage.IChatStorageRepository) error {
 	if evt.IsViewOnce {
 		payload["view_once"] = true
 	}
@@ -220,7 +224,8 @@ func buildOptionalFields(ctx context.Context, client *whatsmeow.Client, evt *eve
 		payload["forwarded"] = true
 	}
 
-	if err := buildMediaFields(ctx, client, msg, payload); err != nil {
+	stored := storedMessageForWebhook(evt, chatStorageRepo)
+	if err := buildMediaFields(msg, payload, stored); err != nil {
 		return err
 	}
 
@@ -229,15 +234,22 @@ func buildOptionalFields(ctx context.Context, client *whatsmeow.Client, evt *eve
 	return nil
 }
 
-func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.Message, payload map[string]any) error {
+func storedMessageForWebhook(evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository) *domainChatStorage.Message {
+	if evt == nil || chatStorageRepo == nil {
+		return nil
+	}
+	stored, err := chatStorageRepo.GetMessageByID(evt.Info.ID)
+	if err != nil {
+		logrus.WithError(err).Debugf("Failed to lookup stored message %s for webhook media payload", evt.Info.ID)
+		return nil
+	}
+	return stored
+}
+
+func buildMediaFields(msg *waE2E.Message, payload map[string]any, stored *domainChatStorage.Message) error {
 	if audioMedia := msg.GetAudioMessage(); audioMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, audioMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download audio: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download audio: %v", err))
-			}
-			payload["audio"] = extracted.MediaPath
+		if mediaPayload, ok := localMediaPayload(stored, "audio", "", false); ok && config.WhatsappAutoDownloadMedia {
+			payload["audio"] = mediaPayload
 		} else {
 			payload["audio"] = map[string]any{
 				"url": audioMedia.GetURL(),
@@ -246,13 +258,8 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	if documentMedia := msg.GetDocumentMessage(); documentMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, documentMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download document: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download document: %v", err))
-			}
-			payload["document"] = buildAutoDownloadPayload(extracted)
+		if mediaPayload, ok := localMediaPayload(stored, "document", documentMedia.GetCaption(), true); ok && config.WhatsappAutoDownloadMedia {
+			payload["document"] = mediaPayload
 		} else {
 			payload["document"] = map[string]any{
 				"url":      documentMedia.GetURL(),
@@ -262,13 +269,8 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	if imageMedia := msg.GetImageMessage(); imageMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, imageMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download image: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download image: %v", err))
-			}
-			payload["image"] = buildAutoDownloadPayload(extracted)
+		if mediaPayload, ok := localMediaPayload(stored, "image", imageMedia.GetCaption(), true); ok && config.WhatsappAutoDownloadMedia {
+			payload["image"] = mediaPayload
 		} else {
 			payload["image"] = map[string]any{
 				"url":     imageMedia.GetURL(),
@@ -278,13 +280,8 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	if stickerMedia := msg.GetStickerMessage(); stickerMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, stickerMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download sticker: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download sticker: %v", err))
-			}
-			payload["sticker"] = extracted.MediaPath
+		if mediaPayload, ok := localMediaPayload(stored, "sticker", "", false); ok && config.WhatsappAutoDownloadMedia {
+			payload["sticker"] = mediaPayload
 		} else {
 			payload["sticker"] = map[string]any{
 				"url": stickerMedia.GetURL(),
@@ -293,13 +290,8 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	if videoMedia := msg.GetVideoMessage(); videoMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, videoMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download video: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download video: %v", err))
-			}
-			payload["video"] = buildAutoDownloadPayload(extracted)
+		if mediaPayload, ok := localMediaPayload(stored, "video", videoMedia.GetCaption(), true); ok && config.WhatsappAutoDownloadMedia {
+			payload["video"] = mediaPayload
 		} else {
 			payload["video"] = map[string]any{
 				"url":     videoMedia.GetURL(),
@@ -309,13 +301,8 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	if ptvMedia := msg.GetPtvMessage(); ptvMedia != nil {
-		if config.WhatsappAutoDownloadMedia {
-			extracted, err := utils.ExtractMedia(ctx, client, config.PathMedia, ptvMedia)
-			if err != nil {
-				logrus.Errorf("Failed to download video note: %v", err)
-				return pkgError.WebhookError(fmt.Sprintf("Failed to download video note: %v", err))
-			}
-			payload["video_note"] = buildAutoDownloadPayload(extracted)
+		if mediaPayload, ok := localMediaPayload(stored, "video_note", ptvMedia.GetCaption(), true); ok && config.WhatsappAutoDownloadMedia {
+			payload["video_note"] = mediaPayload
 		} else {
 			payload["video_note"] = map[string]any{
 				"url":     ptvMedia.GetURL(),
@@ -325,6 +312,23 @@ func buildMediaFields(ctx context.Context, client *whatsmeow.Client, msg *waE2E.
 	}
 
 	return nil
+}
+
+func localMediaPayload(stored *domainChatStorage.Message, mediaType string, caption string, structured bool) (any, bool) {
+	if stored == nil || stored.MediaType != mediaType {
+		return nil, false
+	}
+	path := strings.TrimSpace(stored.LocalMediaPath)
+	if path == "" {
+		return nil, false
+	}
+	if !structured {
+		return path, true
+	}
+	return buildAutoDownloadPayload(utils.ExtractedMedia{
+		MediaPath: path,
+		Caption:   caption,
+	}), true
 }
 
 // buildAutoDownloadPayload builds the media payload for auto-downloaded media.

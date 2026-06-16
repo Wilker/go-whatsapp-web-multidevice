@@ -155,6 +155,8 @@ func restServer(_ *cobra.Command, _ []string) {
 	// Set auto reconnect checking with a guaranteed client instance
 	startAutoReconnectCheckerIfClientAvailable()
 
+	startLocalMediaCleanupWorker()
+
 	if err := app.Listen(config.AppHost + ":" + config.AppPort); err != nil {
 		logrus.Fatalln("Failed to start: ", err.Error())
 	}

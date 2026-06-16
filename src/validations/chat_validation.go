@@ -102,3 +102,52 @@ func ValidateArchiveChat(ctx context.Context, request *domainChat.ArchiveChatReq
 
 	return nil
 }
+
+func ValidateGetChatMediaPolicy(ctx context.Context, request *domainChat.GetChatMediaPolicyRequest) error {
+	err := validation.ValidateStructWithContext(ctx, request,
+		validation.Field(&request.ChatJID, validation.Required),
+	)
+	if err != nil {
+		return pkgError.ValidationError(err.Error())
+	}
+	return nil
+}
+
+func ValidateSetChatMediaPolicy(ctx context.Context, request *domainChat.SetChatMediaPolicyRequest) error {
+	if request.Mode == "" {
+		request.Mode = domainChat.MediaPolicyModeEphemeral
+	}
+	if request.RetentionDays == 0 {
+		request.RetentionDays = domainChat.MediaPolicyRetentionDays
+	}
+
+	err := validation.ValidateStructWithContext(ctx, request,
+		validation.Field(&request.ChatJID, validation.Required),
+		validation.Field(&request.Mode, validation.Required, validation.In(domainChat.MediaPolicyModeEphemeral)),
+		validation.Field(&request.RetentionDays, validation.Required, validation.In(domainChat.MediaPolicyRetentionDays)),
+	)
+	if err != nil {
+		return pkgError.ValidationError(err.Error())
+	}
+	return nil
+}
+
+func ValidateResetChatMediaPolicy(ctx context.Context, request *domainChat.ResetChatMediaPolicyRequest) error {
+	err := validation.ValidateStructWithContext(ctx, request,
+		validation.Field(&request.ChatJID, validation.Required),
+	)
+	if err != nil {
+		return pkgError.ValidationError(err.Error())
+	}
+	return nil
+}
+
+func ValidateDeleteChatLocalMedia(ctx context.Context, request *domainChat.DeleteChatLocalMediaRequest) error {
+	err := validation.ValidateStructWithContext(ctx, request,
+		validation.Field(&request.ChatJID, validation.Required),
+	)
+	if err != nil {
+		return pkgError.ValidationError(err.Error())
+	}
+	return nil
+}

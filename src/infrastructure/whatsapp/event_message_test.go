@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
+	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -174,6 +175,63 @@ func TestIncomingDownloadableMediaSupportsReceivedMediaTypes(t *testing.T) {
 				t.Fatalf("expected media type %q, got %q", tt.mediaType, mediaType)
 			}
 		})
+	}
+}
+
+func TestBuildMediaFieldsUsesStoredLocalMediaPath(t *testing.T) {
+	originalAutoDownload := config.WhatsappAutoDownloadMedia
+	config.WhatsappAutoDownloadMedia = true
+	t.Cleanup(func() { config.WhatsappAutoDownloadMedia = originalAutoDownload })
+
+	caption := "foto"
+	payload := map[string]any{}
+	err := buildMediaFields(&waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{
+			URL:     protoString("https://mmg.whatsapp.net/image"),
+			Caption: protoString(caption),
+		},
+	}, payload, &domainChatStorage.Message{
+		MediaType:      "image",
+		LocalMediaPath: "statics/media/chat/image.jpg",
+	})
+	if err != nil {
+		t.Fatalf("buildMediaFields() unexpected error: %v", err)
+	}
+
+	imagePayload, ok := payload["image"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured image payload, got %#v", payload["image"])
+	}
+	if imagePayload["path"] != "statics/media/chat/image.jpg" || imagePayload["caption"] != caption {
+		t.Fatalf("expected stored local media payload, got %#v", imagePayload)
+	}
+}
+
+func TestBuildMediaFieldsFallsBackToURLWithoutDownloading(t *testing.T) {
+	originalAutoDownload := config.WhatsappAutoDownloadMedia
+	config.WhatsappAutoDownloadMedia = true
+	t.Cleanup(func() { config.WhatsappAutoDownloadMedia = originalAutoDownload })
+
+	payload := map[string]any{}
+	err := buildMediaFields(&waE2E.Message{
+		VideoMessage: &waE2E.VideoMessage{
+			URL:     protoString("https://mmg.whatsapp.net/video"),
+			Caption: protoString("video"),
+		},
+	}, payload, nil)
+	if err != nil {
+		t.Fatalf("buildMediaFields() unexpected error: %v", err)
+	}
+
+	videoPayload, ok := payload["video"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fallback video payload, got %#v", payload["video"])
+	}
+	if videoPayload["url"] != "https://mmg.whatsapp.net/video" {
+		t.Fatalf("expected URL fallback payload, got %#v", videoPayload)
+	}
+	if _, ok := videoPayload["path"]; ok {
+		t.Fatalf("expected no local path in fallback payload, got %#v", videoPayload)
 	}
 }
 

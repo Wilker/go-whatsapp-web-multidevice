@@ -31,7 +31,7 @@ func handleMessage(ctx context.Context, evt *events.Message, chatStorageRepo dom
 	)
 
 	if handleMessageRevoke(ctx, evt, chatStorageRepo, client) {
-		handleWebhookForward(ctx, evt, client)
+		handleWebhookForward(ctx, evt, client, chatStorageRepo)
 		return
 	}
 
@@ -49,7 +49,7 @@ func handleMessage(ctx context.Context, evt *events.Message, chatStorageRepo dom
 	handleAutoReply(ctx, evt, chatStorageRepo, client)
 
 	// Forward to webhook if configured
-	handleWebhookForward(ctx, evt, client)
+	handleWebhookForward(ctx, evt, client, chatStorageRepo)
 }
 
 func handleMessageRevoke(ctx context.Context, evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository, client *whatsmeow.Client) bool {
@@ -131,6 +131,9 @@ func handleIncomingMediaDownload(ctx context.Context, evt *events.Message, chatS
 		return
 	}
 
+	chatJID := normalizedEventChatJID(ctx, evt, client)
+	policy := mediaPolicyForIncomingChat(chatStorageRepo, client, chatJID)
+
 	downloadDir := incomingMediaDownloadDir(ctx, evt, client)
 	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
 		log.Errorf("Failed to create incoming media directory %s for message %s: %v", downloadDir, evt.Info.ID, err)
@@ -163,7 +166,11 @@ func handleIncomingMediaDownload(ctx context.Context, evt *events.Message, chatS
 		return
 	}
 
-	log.Infof("Auto-downloaded %s media for message %s to %s", mediaType, evt.Info.ID, extracted.MediaPath)
+	if policy != nil && policy.Mode == domainChatStorage.ChatMediaPolicyModeEphemeral && isEphemeralPolicyMediaType(mediaType) {
+		log.Infof("Auto-downloaded %s media for message %s to %s with %d-day ephemeral retention", mediaType, evt.Info.ID, extracted.MediaPath, policy.RetentionDays)
+	} else {
+		log.Infof("Auto-downloaded %s media for message %s to %s", mediaType, evt.Info.ID, extracted.MediaPath)
+	}
 }
 
 func incomingDownloadableMedia(msg *waE2E.Message) (whatsmeow.DownloadableMessage, string) {
@@ -192,10 +199,7 @@ func incomingDownloadableMedia(msg *waE2E.Message) (whatsmeow.DownloadableMessag
 }
 
 func incomingMediaDownloadDir(ctx context.Context, evt *events.Message, client *whatsmeow.Client) string {
-	chatJID := evt.Info.Chat.ToNonAD()
-	if client != nil {
-		chatJID = NormalizeJIDFromLID(ctx, chatJID, client).ToNonAD()
-	}
+	chatJID := normalizedEventChatJID(ctx, evt, client)
 
 	chatDirName := utils.ExtractPhoneNumber(chatJID.String())
 	if strings.TrimSpace(chatDirName) == "" {
@@ -208,6 +212,36 @@ func incomingMediaDownloadDir(ctx context.Context, evt *events.Message, client *
 	}
 
 	return filepath.Join(config.PathMedia, chatDirName, timestamp.Format("2006-01-02"))
+}
+
+func normalizedEventChatJID(ctx context.Context, evt *events.Message, client *whatsmeow.Client) types.JID {
+	chatJID := evt.Info.Chat.ToNonAD()
+	if client != nil {
+		chatJID = NormalizeJIDFromLID(ctx, chatJID, client).ToNonAD()
+	}
+	return chatJID
+}
+
+func mediaPolicyForIncomingChat(chatStorageRepo domainChatStorage.IChatStorageRepository, client *whatsmeow.Client, chatJID types.JID) *domainChatStorage.ChatMediaPolicy {
+	if chatStorageRepo == nil || client == nil || client.Store == nil || client.Store.ID == nil || chatJID.IsEmpty() {
+		return nil
+	}
+	deviceID := client.Store.ID.ToNonAD().String()
+	policy, err := chatStorageRepo.GetChatMediaPolicyByDevice(deviceID, chatJID.String())
+	if err != nil {
+		logrus.WithError(err).Warnf("Failed to lookup media policy for chat %s", chatJID.String())
+		return nil
+	}
+	return policy
+}
+
+func isEphemeralPolicyMediaType(mediaType string) bool {
+	switch mediaType {
+	case "image", "video", "video_note":
+		return true
+	default:
+		return false
+	}
 }
 
 func handleAutoMarkRead(ctx context.Context, evt *events.Message, client *whatsmeow.Client) {
@@ -233,7 +267,7 @@ func handleAutoMarkRead(ctx context.Context, evt *events.Message, client *whatsm
 	}
 }
 
-func handleWebhookForward(ctx context.Context, evt *events.Message, client *whatsmeow.Client) {
+func handleWebhookForward(ctx context.Context, evt *events.Message, client *whatsmeow.Client, chatStorageRepo domainChatStorage.IChatStorageRepository) {
 	// Skip webhook for protocol messages that are internal sync messages
 	if protocolMessage := evt.Message.GetProtocolMessage(); protocolMessage != nil {
 		protocolType := protocolMessage.GetType().String()
@@ -253,7 +287,7 @@ func handleWebhookForward(ctx context.Context, evt *events.Message, client *what
 		go func(e *events.Message, c *whatsmeow.Client) {
 			webhookCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := forwardMessageToWebhook(webhookCtx, c, e); err != nil {
+			if err := forwardMessageToWebhook(webhookCtx, c, e, chatStorageRepo); err != nil {
 				logrus.Error("Failed forward to webhook: ", err)
 			}
 		}(evt, client)

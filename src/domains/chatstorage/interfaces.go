@@ -18,6 +18,9 @@ type IChatStorageRepository interface {
 	GetChats(filter *ChatFilter) ([]*Chat, error)
 	DeleteChat(jid string) error
 	DeleteChatByDevice(deviceID, jid string) error
+	StoreChatMediaPolicy(policy *ChatMediaPolicy) error
+	GetChatMediaPolicyByDevice(deviceID, chatJID string) (*ChatMediaPolicy, error)
+	DeleteChatMediaPolicyByDevice(deviceID, chatJID string) error
 
 	// Message operations
 	StoreMessage(message *Message) error
@@ -28,6 +31,9 @@ type IChatStorageRepository interface {
 	SearchMessages(deviceID, chatJID, searchText string, limit int) ([]*Message, error) // Database-level search with device isolation
 	DeleteMessage(id, chatJID string) error
 	DeleteMessageByDevice(deviceID, id, chatJID string) error
+	ListLocalMediaByDeviceChat(deviceID, chatJID string, mediaTypes []string) ([]*LocalMediaRecord, error)
+	ListLocalMediaForEphemeralPolicies(mediaTypes []string) ([]*LocalMediaRecord, error)
+	ClearLocalMediaPathByDevice(deviceID, chatJID, messageID, localMediaPath string) error
 	StoreSentMessageWithContext(ctx context.Context, messageID string, senderJID string, recipientJID string, content string, timestamp time.Time, msg *waE2E.Message) error
 
 	// Statistics

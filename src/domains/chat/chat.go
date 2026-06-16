@@ -106,3 +106,62 @@ type ArchiveChatResponse struct {
 	ChatJID  string `json:"chat_jid"`
 	Archived bool   `json:"archived"`
 }
+
+const (
+	MediaPolicyModePermanent = "permanent"
+	MediaPolicyModeEphemeral = "ephemeral"
+	MediaPolicyRetentionDays = 5
+)
+
+type GetChatMediaPolicyRequest struct {
+	ChatJID string `json:"chat_jid" uri:"chat_jid"`
+}
+
+type SetChatMediaPolicyRequest struct {
+	ChatJID       string `json:"chat_jid" uri:"chat_jid"`
+	Mode          string `json:"mode"`
+	RetentionDays int    `json:"retention_days"`
+}
+
+type ResetChatMediaPolicyRequest struct {
+	ChatJID string `json:"chat_jid" uri:"chat_jid"`
+}
+
+type ChatMediaPolicyResponse struct {
+	ChatJID       string `json:"chat_jid"`
+	Mode          string `json:"mode"`
+	RetentionDays int    `json:"retention_days"`
+	IsDefault     bool   `json:"is_default"`
+	Ephemeral     bool   `json:"ephemeral"`
+}
+
+type DeleteChatLocalMediaRequest struct {
+	ChatJID string `json:"chat_jid" uri:"chat_jid"`
+	DryRun  bool   `json:"dry_run" query:"dry_run"`
+}
+
+type LocalMediaDeleteError struct {
+	MessageID string `json:"message_id"`
+	Path      string `json:"path"`
+	Error     string `json:"error"`
+}
+
+type LocalMediaDeleteResponse struct {
+	ChatJID         string                  `json:"chat_jid,omitempty"`
+	DryRun          bool                    `json:"dry_run"`
+	MediaTypes      []string                `json:"media_types"`
+	MatchedMessages int                     `json:"matched_messages"`
+	FilesFound      int                     `json:"files_found"`
+	FilesDeleted    int                     `json:"files_deleted"`
+	MissingFiles    int                     `json:"missing_files"`
+	SkippedFiles    int                     `json:"skipped_files"`
+	PathsCleared    int                     `json:"paths_cleared"`
+	BytesFound      int64                   `json:"bytes_found"`
+	BytesDeleted    int64                   `json:"bytes_deleted"`
+	Errors          []LocalMediaDeleteError `json:"errors"`
+}
+
+type CleanupExpiredLocalMediaResponse struct {
+	LocalMediaDeleteResponse
+	Cutoff string `json:"cutoff"`
+}

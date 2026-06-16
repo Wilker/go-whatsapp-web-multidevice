@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -53,6 +54,8 @@ var (
 	groupUsecase      domainGroup.IGroupUsecase
 	newsletterUsecase domainNewsletter.INewsletterUsecase
 	deviceUsecase     domainDevice.IDeviceUsecase
+
+	localMediaCleanupWorkerOnce sync.Once
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -395,6 +398,43 @@ func initApp() {
 	groupUsecase = usecase.NewGroupService()
 	newsletterUsecase = usecase.NewNewsletterService()
 	deviceUsecase = usecase.NewDeviceService(dm)
+}
+
+func startLocalMediaCleanupWorker() {
+	localMediaCleanupWorkerOnce.Do(func() {
+		if chatUsecase == nil {
+			logrus.Warn("Local media cleanup worker not started: chat usecase is nil")
+			return
+		}
+
+		go func() {
+			runCleanup := func(reason string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+
+				response, err := chatUsecase.CleanupExpiredLocalMedia(ctx)
+				if err != nil {
+					logrus.WithError(err).Warnf("Local media cleanup failed (%s)", reason)
+					return
+				}
+				logrus.WithFields(logrus.Fields{
+					"reason":           reason,
+					"matched_messages": response.MatchedMessages,
+					"files_deleted":    response.FilesDeleted,
+					"bytes_deleted":    response.BytesDeleted,
+					"paths_cleared":    response.PathsCleared,
+					"errors":           len(response.Errors),
+				}).Info("Local media cleanup completed")
+			}
+
+			runCleanup("startup")
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				runCleanup("scheduled")
+			}
+		}()
+	})
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

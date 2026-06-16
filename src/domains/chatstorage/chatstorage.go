@@ -14,6 +14,20 @@ type Chat struct {
 	Archived            bool      `db:"archived"`
 }
 
+const (
+	ChatMediaPolicyModeEphemeral = "ephemeral"
+)
+
+// ChatMediaPolicy controls local media retention for a chat on a specific device.
+type ChatMediaPolicy struct {
+	DeviceID      string    `db:"device_id"`
+	ChatJID       string    `db:"chat_jid"`
+	Mode          string    `db:"mode"`
+	RetentionDays int       `db:"retention_days"`
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
+}
+
 // Message represents a WhatsApp message
 type Message struct {
 	ID               string    `db:"id"`
@@ -38,6 +52,18 @@ type Message struct {
 	DeletedAt        time.Time `db:"deleted_at"`
 	CreatedAt        time.Time `db:"created_at"`
 	UpdatedAt        time.Time `db:"updated_at"`
+}
+
+// LocalMediaRecord represents a locally stored media file tracked by a message.
+type LocalMediaRecord struct {
+	MessageID      string    `db:"message_id"`
+	ChatJID        string    `db:"chat_jid"`
+	DeviceID       string    `db:"device_id"`
+	MediaType      string    `db:"media_type"`
+	LocalMediaPath string    `db:"local_media_path"`
+	Timestamp      time.Time `db:"timestamp"`
+	FileLength     uint64    `db:"file_length"`
+	RetentionDays  int       `db:"retention_days"`
 }
 
 // MediaInfo represents downloadable media information

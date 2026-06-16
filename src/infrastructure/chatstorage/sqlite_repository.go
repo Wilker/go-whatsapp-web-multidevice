@@ -219,6 +219,10 @@ func (r *SQLiteRepository) DeleteChat(jid string) error {
 		return err
 	}
 
+	if _, err = tx.Exec("DELETE FROM chat_media_policies WHERE chat_jid = ?", jid); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -242,7 +246,84 @@ func (r *SQLiteRepository) DeleteChatByDevice(deviceID, jid string) error {
 		return err
 	}
 
+	if _, err = tx.Exec("DELETE FROM chat_media_policies WHERE chat_jid = ? AND device_id = ?", jid, deviceID); err != nil {
+		return err
+	}
+
 	return tx.Commit()
+}
+
+// StoreChatMediaPolicy creates or updates local media retention policy for a device chat.
+func (r *SQLiteRepository) StoreChatMediaPolicy(policy *domainChatStorage.ChatMediaPolicy) error {
+	if policy == nil {
+		return fmt.Errorf("chat media policy is nil")
+	}
+	if strings.TrimSpace(policy.DeviceID) == "" || strings.TrimSpace(policy.ChatJID) == "" {
+		return fmt.Errorf("device_id and chat_jid are required")
+	}
+
+	now := time.Now()
+	policy.UpdatedAt = now
+	if policy.CreatedAt.IsZero() {
+		policy.CreatedAt = now
+	}
+
+	result, err := r.db.Exec(`
+		UPDATE chat_media_policies
+		SET mode = ?, retention_days = ?, updated_at = ?
+		WHERE device_id = ? AND chat_jid = ?
+	`, policy.Mode, policy.RetentionDays, policy.UpdatedAt, policy.DeviceID, policy.ChatJID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		_, err = r.db.Exec(`
+			INSERT INTO chat_media_policies (
+				device_id, chat_jid, mode, retention_days, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, policy.DeviceID, policy.ChatJID, policy.Mode, policy.RetentionDays, policy.CreatedAt, policy.UpdatedAt)
+	}
+
+	return err
+}
+
+// GetChatMediaPolicyByDevice retrieves local media retention policy for a specific device chat.
+func (r *SQLiteRepository) GetChatMediaPolicyByDevice(deviceID, chatJID string) (*domainChatStorage.ChatMediaPolicy, error) {
+	row := r.db.QueryRow(`
+		SELECT device_id, chat_jid, mode, retention_days, created_at, updated_at
+		FROM chat_media_policies
+		WHERE device_id = ? AND chat_jid = ?
+		LIMIT 1
+	`, deviceID, chatJID)
+
+	policy := &domainChatStorage.ChatMediaPolicy{}
+	err := row.Scan(
+		&policy.DeviceID,
+		&policy.ChatJID,
+		&policy.Mode,
+		&policy.RetentionDays,
+		&policy.CreatedAt,
+		&policy.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return policy, nil
+}
+
+// DeleteChatMediaPolicyByDevice removes local media retention policy for a specific device chat.
+func (r *SQLiteRepository) DeleteChatMediaPolicyByDevice(deviceID, chatJID string) error {
+	_, err := r.db.Exec(`
+		DELETE FROM chat_media_policies
+		WHERE device_id = ? AND chat_jid = ?
+	`, deviceID, chatJID)
+	return err
 }
 
 // StoreMessage creates or updates a message
@@ -537,11 +618,124 @@ func (r *SQLiteRepository) DeleteMessageByDevice(deviceID, id, chatJID string) e
 	return err
 }
 
+// ListLocalMediaByDeviceChat lists locally tracked media files for a device chat and media type set.
+func (r *SQLiteRepository) ListLocalMediaByDeviceChat(deviceID, chatJID string, mediaTypes []string) ([]*domainChatStorage.LocalMediaRecord, error) {
+	typeCondition, typeArgs, err := buildMediaTypesCondition("media_type", mediaTypes)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []any{deviceID, chatJID}
+	args = append(args, typeArgs...)
+
+	query := `
+		SELECT id, chat_jid, device_id, media_type, local_media_path, timestamp, file_length, 0
+		FROM messages
+		WHERE device_id = ?
+			AND chat_jid = ?
+			AND local_media_path IS NOT NULL
+			AND local_media_path != ''
+			AND ` + typeCondition + `
+		ORDER BY timestamp ASC
+	`
+
+	return r.scanLocalMediaRecords(query, args...)
+}
+
+// ListLocalMediaForEphemeralPolicies lists locally tracked media files whose chat has ephemeral retention.
+func (r *SQLiteRepository) ListLocalMediaForEphemeralPolicies(mediaTypes []string) ([]*domainChatStorage.LocalMediaRecord, error) {
+	typeCondition, typeArgs, err := buildMediaTypesCondition("m.media_type", mediaTypes)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []any{domainChatStorage.ChatMediaPolicyModeEphemeral}
+	args = append(args, typeArgs...)
+
+	query := `
+		SELECT m.id, m.chat_jid, m.device_id, m.media_type, m.local_media_path, m.timestamp, m.file_length, p.retention_days
+		FROM messages m
+		INNER JOIN chat_media_policies p
+			ON p.device_id = m.device_id AND p.chat_jid = m.chat_jid
+		WHERE p.mode = ?
+			AND m.local_media_path IS NOT NULL
+			AND m.local_media_path != ''
+			AND ` + typeCondition + `
+		ORDER BY m.timestamp ASC
+	`
+
+	return r.scanLocalMediaRecords(query, args...)
+}
+
+// ClearLocalMediaPathByDevice clears the local media path for a specific message if it still points to the expected file.
+func (r *SQLiteRepository) ClearLocalMediaPathByDevice(deviceID, chatJID, messageID, localMediaPath string) error {
+	_, err := r.db.Exec(`
+		UPDATE messages
+		SET local_media_path = '',
+			updated_at = ?
+		WHERE device_id = ?
+			AND chat_jid = ?
+			AND id = ?
+			AND local_media_path = ?
+	`, time.Now(), deviceID, chatJID, messageID, localMediaPath)
+	return err
+}
+
 // getCount is a private helper for count queries
 func (r *SQLiteRepository) getCount(query string, args ...any) (int64, error) {
 	var count int64
 	err := r.db.QueryRow(query, args...).Scan(&count)
 	return count, err
+}
+
+func buildMediaTypesCondition(column string, mediaTypes []string) (string, []any, error) {
+	normalized := make([]string, 0, len(mediaTypes))
+	for _, mediaType := range mediaTypes {
+		mediaType = strings.TrimSpace(mediaType)
+		if mediaType != "" {
+			normalized = append(normalized, mediaType)
+		}
+	}
+	if len(normalized) == 0 {
+		return "", nil, fmt.Errorf("at least one media type is required")
+	}
+
+	placeholders := make([]string, len(normalized))
+	args := make([]any, len(normalized))
+	for i, mediaType := range normalized {
+		placeholders[i] = "?"
+		args[i] = mediaType
+	}
+
+	return column + " IN (" + strings.Join(placeholders, ", ") + ")", args, nil
+}
+
+func (r *SQLiteRepository) scanLocalMediaRecords(query string, args ...any) ([]*domainChatStorage.LocalMediaRecord, error) {
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []*domainChatStorage.LocalMediaRecord{}
+	for rows.Next() {
+		record := &domainChatStorage.LocalMediaRecord{}
+		if err := rows.Scan(
+			&record.MessageID,
+			&record.ChatJID,
+			&record.DeviceID,
+			&record.MediaType,
+			&record.LocalMediaPath,
+			&record.Timestamp,
+			&record.FileLength,
+			&record.RetentionDays,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+
+	return records, rows.Err()
 }
 
 // scanMessage is a private helper for scanning message rows
@@ -1272,5 +1466,19 @@ func (r *SQLiteRepository) getMigrations() []string {
 
 		// Migration 20: Local path for auto-downloaded media files
 		`ALTER TABLE messages ADD COLUMN local_media_path TEXT`,
+
+		// Migration 21: Device-scoped chat media retention policy
+		`CREATE TABLE IF NOT EXISTS chat_media_policies (
+			device_id VARCHAR(255) NOT NULL,
+			chat_jid VARCHAR(255) NOT NULL,
+			mode VARCHAR(50) NOT NULL,
+			retention_days INTEGER NOT NULL DEFAULT 5,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (device_id, chat_jid)
+		)`,
+
+		// Migration 22: Chat media policy lookup by mode
+		`CREATE INDEX IF NOT EXISTS idx_chat_media_policies_mode ON chat_media_policies(mode)`,
 	}
 }

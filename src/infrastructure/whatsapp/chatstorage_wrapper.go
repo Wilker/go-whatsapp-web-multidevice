@@ -68,6 +68,29 @@ func (r *deviceChatStorage) DeleteChatByDevice(deviceID, jid string) error {
 	return r.base.DeleteChatByDevice(deviceID, jid)
 }
 
+func (r *deviceChatStorage) StoreChatMediaPolicy(policy *domainChatStorage.ChatMediaPolicy) error {
+	if policy != nil && policy.DeviceID == "" {
+		policy.DeviceID = r.deviceID
+	}
+	return r.base.StoreChatMediaPolicy(policy)
+}
+
+func (r *deviceChatStorage) GetChatMediaPolicyByDevice(deviceID, chatJID string) (*domainChatStorage.ChatMediaPolicy, error) {
+	targetDeviceID := deviceID
+	if targetDeviceID == "" {
+		targetDeviceID = r.deviceID
+	}
+	return r.base.GetChatMediaPolicyByDevice(targetDeviceID, chatJID)
+}
+
+func (r *deviceChatStorage) DeleteChatMediaPolicyByDevice(deviceID, chatJID string) error {
+	targetDeviceID := deviceID
+	if targetDeviceID == "" {
+		targetDeviceID = r.deviceID
+	}
+	return r.base.DeleteChatMediaPolicyByDevice(targetDeviceID, chatJID)
+}
+
 func (r *deviceChatStorage) StoreMessage(message *domainChatStorage.Message) error {
 	return r.base.StoreMessage(message)
 }
@@ -109,6 +132,26 @@ func (r *deviceChatStorage) DeleteMessage(id, chatJID string) error {
 
 func (r *deviceChatStorage) DeleteMessageByDevice(deviceID, id, chatJID string) error {
 	return r.base.DeleteMessageByDevice(deviceID, id, chatJID)
+}
+
+func (r *deviceChatStorage) ListLocalMediaByDeviceChat(deviceID, chatJID string, mediaTypes []string) ([]*domainChatStorage.LocalMediaRecord, error) {
+	targetDeviceID := deviceID
+	if targetDeviceID == "" {
+		targetDeviceID = r.deviceID
+	}
+	return r.base.ListLocalMediaByDeviceChat(targetDeviceID, chatJID, mediaTypes)
+}
+
+func (r *deviceChatStorage) ListLocalMediaForEphemeralPolicies(mediaTypes []string) ([]*domainChatStorage.LocalMediaRecord, error) {
+	return r.base.ListLocalMediaForEphemeralPolicies(mediaTypes)
+}
+
+func (r *deviceChatStorage) ClearLocalMediaPathByDevice(deviceID, chatJID, messageID, localMediaPath string) error {
+	targetDeviceID := deviceID
+	if targetDeviceID == "" {
+		targetDeviceID = r.deviceID
+	}
+	return r.base.ClearLocalMediaPathByDevice(targetDeviceID, chatJID, messageID, localMediaPath)
 }
 
 func (r *deviceChatStorage) StoreSentMessageWithContext(ctx context.Context, messageID string, senderJID string, recipientJID string, content string, timestamp time.Time, msg *waE2E.Message) error {

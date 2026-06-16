@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	domainChat "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
@@ -18,6 +20,11 @@ import (
 type serviceChat struct {
 	chatStorageRepo domainChatStorage.IChatStorageRepository
 }
+
+var (
+	localMediaVisualTypes = []string{"image", "video", "video_note"}
+	localMediaNow         = time.Now
+)
 
 func NewChatService(chatStorageRepo domainChatStorage.IChatStorageRepository) domainChat.IChatUsecase {
 	return &serviceChat{
@@ -381,4 +388,229 @@ func (service serviceChat) ArchiveChat(ctx context.Context, request domainChat.A
 	}).Info("Chat archive operation completed successfully")
 
 	return response, nil
+}
+
+func (service serviceChat) GetChatMediaPolicy(ctx context.Context, request domainChat.GetChatMediaPolicyRequest) (response domainChat.ChatMediaPolicyResponse, err error) {
+	if err = validations.ValidateGetChatMediaPolicy(ctx, &request); err != nil {
+		return response, err
+	}
+
+	deviceID, err := requireDeviceID(ctx)
+	if err != nil {
+		return response, err
+	}
+
+	policy, err := service.chatStorageRepo.GetChatMediaPolicyByDevice(deviceID, request.ChatJID)
+	if err != nil {
+		return response, err
+	}
+
+	return buildChatMediaPolicyResponse(request.ChatJID, policy), nil
+}
+
+func (service serviceChat) SetChatMediaPolicy(ctx context.Context, request domainChat.SetChatMediaPolicyRequest) (response domainChat.ChatMediaPolicyResponse, err error) {
+	if err = validations.ValidateSetChatMediaPolicy(ctx, &request); err != nil {
+		return response, err
+	}
+
+	deviceID, err := requireDeviceID(ctx)
+	if err != nil {
+		return response, err
+	}
+
+	policy := &domainChatStorage.ChatMediaPolicy{
+		DeviceID:      deviceID,
+		ChatJID:       request.ChatJID,
+		Mode:          domainChatStorage.ChatMediaPolicyModeEphemeral,
+		RetentionDays: domainChat.MediaPolicyRetentionDays,
+	}
+	if err = service.chatStorageRepo.StoreChatMediaPolicy(policy); err != nil {
+		return response, err
+	}
+
+	stored, err := service.chatStorageRepo.GetChatMediaPolicyByDevice(deviceID, request.ChatJID)
+	if err != nil {
+		return response, err
+	}
+
+	return buildChatMediaPolicyResponse(request.ChatJID, stored), nil
+}
+
+func (service serviceChat) ResetChatMediaPolicy(ctx context.Context, request domainChat.ResetChatMediaPolicyRequest) (response domainChat.ChatMediaPolicyResponse, err error) {
+	if err = validations.ValidateResetChatMediaPolicy(ctx, &request); err != nil {
+		return response, err
+	}
+
+	deviceID, err := requireDeviceID(ctx)
+	if err != nil {
+		return response, err
+	}
+
+	if err = service.chatStorageRepo.DeleteChatMediaPolicyByDevice(deviceID, request.ChatJID); err != nil {
+		return response, err
+	}
+
+	return buildChatMediaPolicyResponse(request.ChatJID, nil), nil
+}
+
+func (service serviceChat) DeleteChatLocalMedia(ctx context.Context, request domainChat.DeleteChatLocalMediaRequest) (response domainChat.LocalMediaDeleteResponse, err error) {
+	if err = validations.ValidateDeleteChatLocalMedia(ctx, &request); err != nil {
+		return response, err
+	}
+
+	deviceID, err := requireDeviceID(ctx)
+	if err != nil {
+		return response, err
+	}
+
+	records, err := service.chatStorageRepo.ListLocalMediaByDeviceChat(deviceID, request.ChatJID, localMediaVisualTypes)
+	if err != nil {
+		return response, err
+	}
+
+	response = service.deleteLocalMediaRecords(records, request.DryRun, localMediaVisualTypes)
+	response.ChatJID = request.ChatJID
+	return response, nil
+}
+
+func (service serviceChat) CleanupExpiredLocalMedia(ctx context.Context) (response domainChat.CleanupExpiredLocalMediaResponse, err error) {
+	records, err := service.chatStorageRepo.ListLocalMediaForEphemeralPolicies(localMediaVisualTypes)
+	if err != nil {
+		return response, err
+	}
+
+	now := localMediaNow()
+	cutoff := now.AddDate(0, 0, -domainChat.MediaPolicyRetentionDays)
+	eligible := make([]*domainChatStorage.LocalMediaRecord, 0, len(records))
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		retentionDays := record.RetentionDays
+		if retentionDays <= 0 {
+			retentionDays = domainChat.MediaPolicyRetentionDays
+		}
+		recordCutoff := now.AddDate(0, 0, -retentionDays)
+		if !record.Timestamp.After(recordCutoff) {
+			eligible = append(eligible, record)
+		}
+	}
+
+	response.LocalMediaDeleteResponse = service.deleteLocalMediaRecords(eligible, false, localMediaVisualTypes)
+	response.Cutoff = cutoff.Format(time.RFC3339)
+	return response, nil
+}
+
+func requireDeviceID(ctx context.Context) (string, error) {
+	deviceID := strings.TrimSpace(deviceIDFromContext(ctx))
+	if deviceID == "" {
+		return "", fmt.Errorf("device identification required")
+	}
+	return deviceID, nil
+}
+
+func buildChatMediaPolicyResponse(chatJID string, policy *domainChatStorage.ChatMediaPolicy) domainChat.ChatMediaPolicyResponse {
+	if policy == nil {
+		return domainChat.ChatMediaPolicyResponse{
+			ChatJID:       chatJID,
+			Mode:          domainChat.MediaPolicyModePermanent,
+			RetentionDays: 0,
+			IsDefault:     true,
+			Ephemeral:     false,
+		}
+	}
+
+	return domainChat.ChatMediaPolicyResponse{
+		ChatJID:       policy.ChatJID,
+		Mode:          domainChat.MediaPolicyModeEphemeral,
+		RetentionDays: policy.RetentionDays,
+		IsDefault:     false,
+		Ephemeral:     true,
+	}
+}
+
+func (service serviceChat) deleteLocalMediaRecords(records []*domainChatStorage.LocalMediaRecord, dryRun bool, mediaTypes []string) domainChat.LocalMediaDeleteResponse {
+	response := domainChat.LocalMediaDeleteResponse{
+		DryRun:     dryRun,
+		MediaTypes: append([]string(nil), mediaTypes...),
+		Errors:     []domainChat.LocalMediaDeleteError{},
+	}
+
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		response.MatchedMessages++
+
+		path := strings.TrimSpace(record.LocalMediaPath)
+		if path == "" {
+			response.SkippedFiles++
+			continue
+		}
+
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				response.MissingFiles++
+				if !dryRun {
+					if clearErr := service.chatStorageRepo.ClearLocalMediaPathByDevice(record.DeviceID, record.ChatJID, record.MessageID, record.LocalMediaPath); clearErr != nil {
+						response.Errors = append(response.Errors, domainChat.LocalMediaDeleteError{
+							MessageID: record.MessageID,
+							Path:      path,
+							Error:     clearErr.Error(),
+						})
+					} else {
+						response.PathsCleared++
+					}
+				}
+				continue
+			}
+			response.Errors = append(response.Errors, domainChat.LocalMediaDeleteError{
+				MessageID: record.MessageID,
+				Path:      path,
+				Error:     err.Error(),
+			})
+			continue
+		}
+
+		if !info.Mode().IsRegular() {
+			response.SkippedFiles++
+			response.Errors = append(response.Errors, domainChat.LocalMediaDeleteError{
+				MessageID: record.MessageID,
+				Path:      path,
+				Error:     "local media path is not a regular file",
+			})
+			continue
+		}
+
+		response.FilesFound++
+		response.BytesFound += info.Size()
+
+		if dryRun {
+			continue
+		}
+
+		if err = os.Remove(path); err != nil {
+			response.Errors = append(response.Errors, domainChat.LocalMediaDeleteError{
+				MessageID: record.MessageID,
+				Path:      path,
+				Error:     err.Error(),
+			})
+			continue
+		}
+
+		response.FilesDeleted++
+		response.BytesDeleted += info.Size()
+		if clearErr := service.chatStorageRepo.ClearLocalMediaPathByDevice(record.DeviceID, record.ChatJID, record.MessageID, record.LocalMediaPath); clearErr != nil {
+			response.Errors = append(response.Errors, domainChat.LocalMediaDeleteError{
+				MessageID: record.MessageID,
+				Path:      path,
+				Error:     clearErr.Error(),
+			})
+		} else {
+			response.PathsCleared++
+		}
+	}
+
+	return response
 }
