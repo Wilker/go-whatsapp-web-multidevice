@@ -465,6 +465,12 @@ cd /Users/wilker/git/go-whatsapp-web-multidevice/src
 go run . mcp --host 127.0.0.1 --port 8080
 ```
 
+If the local macOS LaunchAgent is installed, restart the background MCP server with:
+
+```bash
+launchctl kickstart -k gui/501/io.wilker.whatsapp-mcp
+```
+
 The local endpoints are:
 
 - SSE: `http://127.0.0.1:8080/sse`
