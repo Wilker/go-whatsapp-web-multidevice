@@ -67,6 +67,7 @@ func TestValidateSendImage(t *testing.T) {
 		Size:     100,
 		Header:   map[string][]string{"Content-Type": {"image/png"}},
 	}
+	replyMessageID := "3EB089B9D6ADD58153C561"
 
 	type args struct {
 		request domainSend.ImageRequest
@@ -82,8 +83,9 @@ func TestValidateSendImage(t *testing.T) {
 				BaseRequest: domainSend.BaseRequest{
 					Phone: "1728937129312@s.whatsapp.net",
 				},
-				Caption: "Hello this is testing",
-				Image:   image,
+				Caption:        "Hello this is testing",
+				ReplyMessageID: &replyMessageID,
+				Image:          image,
 			}},
 			err: nil,
 		},
@@ -138,6 +140,7 @@ func TestValidateSendFile(t *testing.T) {
 		Size:     100,
 		Header:   map[string][]string{"Content-Type": {"image/png"}},
 	}
+	replyMessageID := "3EB089B9D6ADD58153C561"
 
 	type args struct {
 		request domainSend.FileRequest
@@ -153,7 +156,8 @@ func TestValidateSendFile(t *testing.T) {
 				BaseRequest: domainSend.BaseRequest{
 					Phone: "1728937129312@s.whatsapp.net",
 				},
-				File: file,
+				File:           file,
+				ReplyMessageID: &replyMessageID,
 			}},
 			err: nil,
 		},
@@ -204,6 +208,7 @@ func TestValidateSendVideo(t *testing.T) {
 		Size:     100,
 		Header:   map[string][]string{"Content-Type": {"video/mp4"}},
 	}
+	replyMessageID := "3EB089B9D6ADD58153C561"
 
 	type args struct {
 		request domainSend.VideoRequest
@@ -219,10 +224,11 @@ func TestValidateSendVideo(t *testing.T) {
 				BaseRequest: domainSend.BaseRequest{
 					Phone: "1728937129312@s.whatsapp.net",
 				},
-				Caption:  "simple caption",
-				Video:    file,
-				ViewOnce: false,
-				Compress: false,
+				Caption:        "simple caption",
+				ReplyMessageID: &replyMessageID,
+				Video:          file,
+				ViewOnce:       false,
+				Compress:       false,
 			}},
 			err: nil,
 		},
@@ -544,6 +550,17 @@ func TestValidateSendContact(t *testing.T) {
 			}},
 			err: pkgError.ValidationError("contact_phone: cannot be blank."),
 		},
+		{
+			name: "should error with plus-only contact phone",
+			args: args{request: domainSend.ContactRequest{
+				BaseRequest: domainSend.BaseRequest{
+					Phone: "1728937129312@s.whatsapp.net",
+				},
+				ContactName:  "Aldino",
+				ContactPhone: "+",
+			}},
+			err: pkgError.ValidationError("contact phone number cannot be empty"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -646,6 +663,7 @@ func TestValidateSendAudio(t *testing.T) {
 		Size:     100,
 		Header:   map[string][]string{"Content-Type": {"audio/mp3"}},
 	}
+	replyMessageID := "3EB089B9D6ADD58153C561"
 
 	type args struct {
 		request domainSend.AudioRequest
@@ -661,7 +679,8 @@ func TestValidateSendAudio(t *testing.T) {
 				BaseRequest: domainSend.BaseRequest{
 					Phone: "1728937129312@s.whatsapp.net",
 				},
-				Audio: audio,
+				Audio:          audio,
+				ReplyMessageID: &replyMessageID,
 			}},
 			err: nil,
 		},

@@ -74,6 +74,10 @@ func (s *stubSendUsecase) SendChatPresence(context.Context, domainSend.ChatPrese
 	return domainSend.GenericResponse{}, nil
 }
 
+func (s *stubSendUsecase) SendForward(context.Context, domainSend.ForwardRequest) (domainSend.GenericResponse, error) {
+	return domainSend.GenericResponse{}, nil
+}
+
 func TestHandleSendTextReturnsStructuredServiceError(t *testing.T) {
 	prepareMCPDefaultDevice()
 

@@ -91,36 +91,38 @@ func TestScanMessageAcceptsNullOptionalTextColumns(t *testing.T) {
 	now := time.Now()
 
 	message, err := repo.scanMessage(fakeMessageScanner{values: []any{
-		"msg-1",
-		"120363424157959439@g.us",
-		"5511999999999@s.whatsapp.net",
-		"5511888888888@s.whatsapp.net",
-		nil,
-		now,
-		false,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		[]byte{1, 2, 3},
-		[]byte{4, 5, 6},
-		[]byte{7, 8, 9},
-		uint64(42),
-		nil,
-		now,
-		now,
+		"msg-1",                        // id
+		"120363424157959439@g.us",      // chat_jid
+		"5511999999999@s.whatsapp.net", // device_id
+		"5511888888888@s.whatsapp.net", // sender
+		nil,                            // content
+		now,                            // timestamp
+		false,                          // is_from_me
+		nil,                            // media_type
+		nil,                            // call_metadata
+		nil,                            // filename
+		nil,                            // url
+		nil,                            // direct_path
+		nil,                            // local_media_path
+		nil,                            // reply_to_message_id
+		nil,                            // quoted_text
+		nil,                            // quoted_sender
+		[]byte{1, 2, 3},                // media_key
+		[]byte{4, 5, 6},                // file_sha256
+		[]byte{7, 8, 9},                // file_enc_sha256
+		uint64(42),                     // file_length
+		nil,                            // referral_metadata
+		nil,                            // deleted_at
+		now,                            // created_at
+		now,                            // updated_at
 	}})
 	if err != nil {
 		t.Fatalf("scanMessage() unexpected error: %v", err)
 	}
 
-	if message.Content != "" || message.MediaType != "" || message.Filename != "" || message.URL != "" || message.DirectPath != "" ||
+	if message.Content != "" || message.MediaType != "" || message.CallMetadata != "" || message.Filename != "" || message.URL != "" || message.DirectPath != "" ||
 		message.LocalMediaPath != "" ||
-		message.ReplyToMessageID != "" || message.QuotedText != "" || message.QuotedSender != "" {
+		message.ReplyToMessageID != "" || message.QuotedText != "" || message.QuotedSender != "" || message.ReferralMetadata != "" {
 		t.Fatalf("expected nullable text fields to be normalized to empty strings, got %+v", message)
 	}
 	if !message.DeletedAt.IsZero() {

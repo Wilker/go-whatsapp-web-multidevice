@@ -30,6 +30,16 @@ func handleMessage(ctx context.Context, evt *events.Message, chatStorageRepo dom
 		evt.Message,
 	)
 
+	evt = materializeSecretEditMessage(ctx, evt, client)
+
+	if isReactionMessage(evt) {
+		if err := chatStorageRepo.CreateReaction(ctx, evt); err != nil {
+			log.Errorf("Failed to store incoming reaction %s: %v", evt.Info.ID, err)
+		}
+		handleWebhookForward(ctx, evt, client, chatStorageRepo)
+		return
+	}
+
 	if handleMessageRevoke(ctx, evt, chatStorageRepo, client) {
 		handleWebhookForward(ctx, evt, client, chatStorageRepo)
 		return
@@ -267,7 +277,33 @@ func handleAutoMarkRead(ctx context.Context, evt *events.Message, client *whatsm
 	}
 }
 
-func handleWebhookForward(ctx context.Context, evt *events.Message, client *whatsmeow.Client, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+func materializeSecretEditMessage(ctx context.Context, evt *events.Message, client *whatsmeow.Client) *events.Message {
+	if evt == nil || evt.Message == nil || client == nil {
+		return evt
+	}
+	msg := utils.UnwrapMessage(evt.Message)
+	secret := msg.GetSecretEncryptedMessage()
+	if secret == nil || secret.GetSecretEncType() != waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+		return evt
+	}
+	decrypted, err := client.DecryptSecretEncryptedMessage(ctx, evt)
+	if err != nil {
+		targetID := ""
+		if key := secret.GetTargetMessageKey(); key != nil {
+			targetID = key.GetID()
+		}
+		log.Warnf("Failed to decrypt SecretEncryptedMessage(MESSAGE_EDIT) for %s (target=%s): %v", evt.Info.ID, targetID, err)
+		return evt
+	}
+	if decrypted == nil {
+		return evt
+	}
+	cloned := *evt
+	cloned.Message = decrypted
+	return &cloned
+}
+
+func handleWebhookForward(ctx context.Context, evt *events.Message, client *whatsmeow.Client, repositories ...domainChatStorage.IChatStorageRepository) {
 	// Skip webhook for protocol messages that are internal sync messages
 	if protocolMessage := evt.Message.GetProtocolMessage(); protocolMessage != nil {
 		protocolType := protocolMessage.GetType().String()
@@ -282,14 +318,20 @@ func handleWebhookForward(ctx context.Context, evt *events.Message, client *what
 		}
 	}
 
-	if (len(config.WhatsappWebhook) > 0 || config.ChatwootEnabled) &&
-		!strings.Contains(evt.Info.SourceString(), "broadcast") {
-		go func(e *events.Message, c *whatsmeow.Client) {
-			webhookCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := forwardMessageToWebhook(webhookCtx, c, e, chatStorageRepo); err != nil {
-				logrus.Error("Failed forward to webhook: ", err)
-			}
-		}(evt, client)
+	if strings.Contains(evt.Info.SourceString(), "broadcast") {
+		return
 	}
+
+	var chatStorageRepo domainChatStorage.IChatStorageRepository
+	if len(repositories) > 0 {
+		chatStorageRepo = repositories[0]
+	}
+
+	go func(e *events.Message, c *whatsmeow.Client) {
+		webhookCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := forwardMessageToWebhook(webhookCtx, c, e, chatStorageRepo); err != nil {
+			logrus.Error("Failed forward to webhook: ", err)
+		}
+	}(evt, client)
 }

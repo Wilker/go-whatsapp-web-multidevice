@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	domainChat "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 type fakeChatUsecase struct {

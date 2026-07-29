@@ -26,7 +26,7 @@ import (
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/helpers"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/validations"
 	"github.com/disintegration/imaging"
-	fiberUtils "github.com/gofiber/fiber/v2/utils"
+	fiberUtils "github.com/gofiber/utils/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/valyala/fasthttp"
 	"go.mau.fi/whatsmeow"
@@ -50,11 +50,14 @@ func NewSendService(appService app.IAppUsecase, chatStorageRepo domainChatStorag
 	}
 }
 
-// wrapSendMessage wraps the message sending process with message ID saving
+// wrapSendMessage sends the message and stores it asynchronously on success.
+// whatsmeow handles the trusted-contact (tctoken) lifecycle internally; a 463
+// "reach-out timelock" rejection is a WhatsApp server-side restriction that the
+// client cannot retry around, so it is surfaced as-is via normalizeSendError.
 func (service serviceSend) wrapSendMessage(ctx context.Context, client *whatsmeow.Client, recipient types.JID, msg *waE2E.Message, content string) (whatsmeow.SendResponse, error) {
 	ts, err := client.SendMessage(ctx, recipient, msg)
 	if err != nil {
-		return whatsmeow.SendResponse{}, err
+		return whatsmeow.SendResponse{}, normalizeSendError(err)
 	}
 
 	// Store the sent message using chatstorage
@@ -63,22 +66,63 @@ func (service serviceSend) wrapSendMessage(ctx context.Context, client *whatsmeo
 		senderJID = client.Store.ID.String()
 	}
 
-	// Store message asynchronously with timeout
-	// Use a goroutine to avoid blocking the send operation
+	// Store message asynchronously with timeout.
+	// Preserve device context (for device_id scoping) but detach from request cancellation.
+	// The budget must survive chat-storage write contention (history sync batches
+	// hold the SQLite writer for a while; busy_timeout is 30s) — with a short
+	// deadline the sent message is silently missing from the chat viewer.
 	go func() {
-		storeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 
 		if err := service.chatStorageRepo.StoreSentMessageWithContext(storeCtx, ts.ID, senderJID, recipient.String(), content, ts.Timestamp, msg); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				logrus.Warn("Timeout storing sent message")
+				logrus.Warnf("Timeout storing sent message %s to %s", ts.ID, recipient.String())
 			} else {
-				logrus.Warnf("Failed to store sent message: %v", err)
+				logrus.Warnf("Failed to store sent message %s to %s: %v", ts.ID, recipient.String(), err)
 			}
 		}
 	}()
 
 	return ts, nil
+}
+
+func (service serviceSend) mergeReplyContext(ctx context.Context, contextInfo *waE2E.ContextInfo, replyMessageID *string) *waE2E.ContextInfo {
+	if replyMessageID == nil || *replyMessageID == "" {
+		return contextInfo
+	}
+
+	// Scope the reply lookup to the active device so a message ID from another
+	// device cannot be bound as quote context (see usecase AGENTS.md).
+	message, err := service.chatStorageRepo.GetMessageByIDAndDevice(deviceIDFromContext(ctx), *replyMessageID)
+	if err != nil {
+		logrus.Warnf("Error retrieving reply message ID %s: %v, continuing without reply context", *replyMessageID, err)
+		return contextInfo
+	}
+	if message == nil {
+		logrus.Warnf("Reply message ID %s not found in storage, continuing without reply context", *replyMessageID)
+		return contextInfo
+	}
+
+	if contextInfo == nil {
+		contextInfo = &waE2E.ContextInfo{}
+	}
+	contextInfo.StanzaID = replyMessageID
+	contextInfo.Participant = proto.String(message.Sender)
+	contextInfo.QuotedMessage = &waE2E.Message{
+		Conversation: proto.String(message.Content),
+	}
+	return contextInfo
+}
+
+func normalizeSendError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if whatsapp.IsReachoutTimelockError(err) {
+		return pkgError.ErrWaReachoutTimelock
+	}
+	return err
 }
 
 func (service serviceSend) SendText(ctx context.Context, request domainSend.MessageRequest) (response domainSend.GenericResponse, err error) {
@@ -133,53 +177,7 @@ func (service serviceSend) SendText(ctx context.Context, request domainSend.Mess
 		msg.ExtendedTextMessage.ContextInfo.MentionedJID = parsedMentions
 	}
 
-	// Reply message
-	if request.ReplyMessageID != nil && *request.ReplyMessageID != "" {
-		message, err := service.chatStorageRepo.GetMessageByID(*request.ReplyMessageID)
-		if err != nil {
-			logrus.Warnf("Error retrieving reply message ID %s: %v, continuing without reply context", *request.ReplyMessageID, err)
-		} else if message != nil { // Only set reply context if we found the message
-			// Ensure we use a full JID (user@server) for the Participant field
-			// Use the sender JID from storage as-is. Modern storage should already provide
-			// fully-qualified JIDs (e.g., user@s.whatsapp.net or group@g.us). Avoid mutating
-			// the JID here to prevent corrupting valid group or special JIDs.
-			participantJID := message.Sender
-
-			// Build base ContextInfo with reply details
-			ctxInfo := &waE2E.ContextInfo{
-				StanzaID:    request.ReplyMessageID,
-				Participant: proto.String(participantJID),
-				QuotedMessage: &waE2E.Message{
-					Conversation: proto.String(message.Content),
-				},
-			}
-
-			// Preserve forwarding flag if set
-			if request.BaseRequest.IsForwarded {
-				ctxInfo.IsForwarded = proto.Bool(true)
-				ctxInfo.ForwardingScore = proto.Uint32(100)
-			}
-
-			// Preserve disappearing message duration if provided
-			if request.BaseRequest.Duration != nil && *request.BaseRequest.Duration > 0 {
-				ctxInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
-			} else {
-				ctxInfo.Expiration = proto.Uint32(service.getDefaultEphemeralExpiration(participantJID))
-			}
-
-			// Preserve mentions
-			if len(parsedMentions) > 0 {
-				ctxInfo.MentionedJID = parsedMentions
-			}
-
-			msg.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
-				Text:        proto.String(request.Message),
-				ContextInfo: ctxInfo,
-			}
-		} else {
-			logrus.Warnf("Reply message ID %s not found in storage, continuing without reply context", *request.ReplyMessageID)
-		}
-	}
+	msg.ExtendedTextMessage.ContextInfo = service.mergeReplyContext(ctx, msg.ExtendedTextMessage.ContextInfo, request.ReplyMessageID)
 
 	ts, err := service.wrapSendMessage(ctx, client, dataWaRecipient, msg, request.Message)
 	if err != nil {
@@ -215,6 +213,11 @@ func (service serviceSend) SendImage(ctx context.Context, request domainSend.Ima
 		oriImagePath   string
 	)
 
+	// Prefix every temp file with a UUID, as the video path already does.
+	// Without it two concurrent sends of the same filename share one path on
+	// disk and the async cleanup below deletes the other request's files.
+	generateUUID := fiberUtils.UUIDv4()
+
 	if request.ImageURL != nil && *request.ImageURL != "" {
 		// Download image from URL
 		imageData, fileName, err := utils.DownloadImageFromURL(*request.ImageURL)
@@ -247,20 +250,20 @@ func (service serviceSend) SendImage(ctx context.Context, request domainSend.Ima
 			imageData = pngBuffer.Bytes()
 		}
 
-		oriImagePath = fmt.Sprintf("%s/%s", config.PathSendItems, fileName)
-		imageName = fileName
+		imageName = generateUUID + fileName
+		oriImagePath = fmt.Sprintf("%s/%s", config.PathSendItems, imageName)
 		err = os.WriteFile(oriImagePath, imageData, 0644)
 		if err != nil {
 			return response, pkgError.InternalServerError(fmt.Sprintf("failed to save downloaded image %v", err))
 		}
 	} else if request.Image != nil {
 		// Save image to server
-		oriImagePath = fmt.Sprintf("%s/%s", config.PathSendItems, request.Image.Filename)
+		imageName = generateUUID + request.Image.Filename
+		oriImagePath = fmt.Sprintf("%s/%s", config.PathSendItems, imageName)
 		err = fasthttp.SaveMultipartFile(request.Image, oriImagePath)
 		if err != nil {
 			return response, err
 		}
-		imageName = request.Image.Filename
 	}
 	deletedItems = append(deletedItems, oriImagePath)
 
@@ -338,6 +341,7 @@ func (service serviceSend) SendImage(ctx context.Context, request domainSend.Ima
 		}
 		msg.ImageMessage.ContextInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
 	}
+	msg.ImageMessage.ContextInfo = service.mergeReplyContext(ctx, msg.ImageMessage.ContextInfo, request.ReplyMessageID)
 
 	caption := "🖼️ Image"
 	if request.Caption != "" {
@@ -436,6 +440,7 @@ func (service serviceSend) SendFile(ctx context.Context, request domainSend.File
 		}
 		msg.DocumentMessage.ContextInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
 	}
+	msg.DocumentMessage.ContextInfo = service.mergeReplyContext(ctx, msg.DocumentMessage.ContextInfo, request.ReplyMessageID)
 
 	caption := "📄 Document"
 	if fileName != "" {
@@ -896,6 +901,7 @@ func (service serviceSend) SendVideo(ctx context.Context, request domainSend.Vid
 		MediaKey:            uploaded.MediaKey,
 		DirectPath:          proto.String(uploaded.DirectPath),
 		ViewOnce:            proto.Bool(request.ViewOnce),
+		GifPlayback:         proto.Bool(request.GifPlayback),
 		JPEGThumbnail:       dataWaThumbnail,
 		ThumbnailEncSHA256:  dataWaThumbnail,
 		ThumbnailSHA256:     dataWaThumbnail,
@@ -915,6 +921,7 @@ func (service serviceSend) SendVideo(ctx context.Context, request domainSend.Vid
 		}
 		msg.VideoMessage.ContextInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
 	}
+	msg.VideoMessage.ContextInfo = service.mergeReplyContext(ctx, msg.VideoMessage.ContextInfo, request.ReplyMessageID)
 
 	caption := "🎥 Video"
 	if request.Caption != "" {
@@ -946,10 +953,12 @@ func (service serviceSend) SendContact(ctx context.Context, request domainSend.C
 		return response, err
 	}
 
+	contactName := strings.TrimSpace(request.ContactName)
+	contactPhone := utils.CleanPhoneForWhatsApp(request.ContactPhone)
 	msgVCard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nN:;%v;;;\nFN:%v\nTEL;type=CELL;waid=%v:+%v\nEND:VCARD",
-		request.ContactName, request.ContactName, request.ContactPhone, request.ContactPhone)
+		contactName, contactName, contactPhone, contactPhone)
 	msg := &waE2E.Message{ContactMessage: &waE2E.ContactMessage{
-		DisplayName: proto.String(request.ContactName),
+		DisplayName: proto.String(contactName),
 		Vcard:       proto.String(msgVCard),
 	}}
 
@@ -967,7 +976,10 @@ func (service serviceSend) SendContact(ctx context.Context, request domainSend.C
 		msg.ContactMessage.ContextInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
 	}
 
-	content := "👤 " + request.ContactName
+	content := "👤 " + contactName
+	if contactPhone != "" {
+		content = fmt.Sprintf("👤 %s (+%s)", contactName, contactPhone)
+	}
 
 	ts, err := service.wrapSendMessage(ctx, client, dataWaRecipient, msg, content)
 	if err != nil {
@@ -1007,13 +1019,15 @@ func (service serviceSend) SendLink(ctx context.Context, request domainSend.Link
 		logrus.Debugf("Image dimensions: Square image or dimensions not available")
 	}
 
+	messageText := buildLinkMessageText(request.Caption, request.Link)
+
 	// Create the message
 	msg := &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-		Text:          proto.String(fmt.Sprintf("%s\n%s", request.Caption, request.Link)),
+		Text:          proto.String(messageText),
 		Title:         proto.String(metadata.Title),
 		MatchedText:   proto.String(request.Link),
 		Description:   proto.String(metadata.Description),
-		JPEGThumbnail: metadata.ImageThumb,
+		JPEGThumbnail: metadata.JPEGThumb,
 	}}
 
 	if request.BaseRequest.IsForwarded {
@@ -1031,7 +1045,7 @@ func (service serviceSend) SendLink(ctx context.Context, request domainSend.Link
 	}
 
 	// If we have a thumbnail image, upload it to WhatsApp's servers
-	if len(metadata.ImageThumb) > 0 && metadata.Height != nil && metadata.Width != nil {
+	if len(metadata.ImageThumb) > 0 {
 		uploadedThumb, err := service.uploadMedia(ctx, client, whatsmeow.MediaLinkThumbnail, metadata.ImageThumb, dataWaRecipient)
 		if err == nil {
 			// Update the message with the uploaded thumbnail information
@@ -1039,18 +1053,19 @@ func (service serviceSend) SendLink(ctx context.Context, request domainSend.Link
 			msg.ExtendedTextMessage.ThumbnailSHA256 = uploadedThumb.FileSHA256
 			msg.ExtendedTextMessage.ThumbnailEncSHA256 = uploadedThumb.FileEncSHA256
 			msg.ExtendedTextMessage.MediaKey = uploadedThumb.MediaKey
-			msg.ExtendedTextMessage.ThumbnailHeight = metadata.Height
-			msg.ExtendedTextMessage.ThumbnailWidth = metadata.Width
+			msg.ExtendedTextMessage.MediaKeyTimestamp = proto.Int64(time.Now().Unix())
+			if metadata.Height != nil {
+				msg.ExtendedTextMessage.ThumbnailHeight = metadata.Height
+			}
+			if metadata.Width != nil {
+				msg.ExtendedTextMessage.ThumbnailWidth = metadata.Width
+			}
 		} else {
 			logrus.Warnf("Failed to upload thumbnail: %v, continue without uploaded thumbnail", err)
 		}
 	}
 
-	content := "🔗 " + request.Link
-	if request.Caption != "" {
-		content = "🔗 " + request.Caption
-	}
-	ts, err := service.wrapSendMessage(ctx, client, dataWaRecipient, msg, content)
+	ts, err := service.wrapSendMessage(ctx, client, dataWaRecipient, msg, messageText)
 	if err != nil {
 		return response, err
 	}
@@ -1058,6 +1073,17 @@ func (service serviceSend) SendLink(ctx context.Context, request domainSend.Link
 	response.MessageID = ts.ID
 	response.Status = fmt.Sprintf("Link sent to %s (server timestamp: %s)", request.BaseRequest.Phone, ts.Timestamp.String())
 	return response, nil
+}
+
+func buildLinkMessageText(caption, link string) string {
+	caption = strings.TrimSpace(caption)
+	link = strings.TrimSpace(link)
+
+	if caption == "" {
+		return link
+	}
+
+	return fmt.Sprintf("%s\n%s", caption, link)
 }
 
 func (service serviceSend) SendLocation(ctx context.Context, request domainSend.LocationRequest) (response domainSend.GenericResponse, err error) {
@@ -1315,6 +1341,7 @@ func (service serviceSend) SendAudio(ctx context.Context, request domainSend.Aud
 		}
 		msg.AudioMessage.ContextInfo.Expiration = proto.Uint32(uint32(*request.BaseRequest.Duration))
 	}
+	msg.AudioMessage.ContextInfo = service.mergeReplyContext(ctx, msg.AudioMessage.ContextInfo, request.ReplyMessageID)
 
 	content := "🎵 Audio"
 

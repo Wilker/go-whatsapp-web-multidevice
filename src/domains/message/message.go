@@ -88,6 +88,7 @@ type DownloadMediaResponse struct {
 	MediaType      string `json:"media_type"`
 	Filename       string `json:"filename"`
 	FilePath       string `json:"file_path"`
+	FileURL        string `json:"file_url"`
 	FileSize       int64  `json:"file_size"`
 	OutputDirUsed  string `json:"output_dir_used,omitempty"`
 	PathModeUsed   string `json:"path_mode_used,omitempty"`

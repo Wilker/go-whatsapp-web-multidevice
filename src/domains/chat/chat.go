@@ -56,23 +56,26 @@ type ChatInfo struct {
 }
 
 type MessageInfo struct {
-	ID               string `json:"id"`
-	ChatJID          string `json:"chat_jid"`
-	SenderJID        string `json:"sender_jid"`
-	Content          string `json:"content"`
-	Timestamp        string `json:"timestamp"`
-	IsFromMe         bool   `json:"is_from_me"`
-	MediaType        string `json:"media_type"`
-	Filename         string `json:"filename"`
-	URL              string `json:"url"`
-	LocalMediaPath   string `json:"local_media_path"`
-	ReplyToMessageID string `json:"reply_to_message_id"`
-	QuotedText       string `json:"quoted_text"`
-	QuotedSenderJID  string `json:"quoted_sender_jid"`
-	FileLength       uint64 `json:"file_length"`
-	DeletedAt        string `json:"deleted_at"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID                string         `json:"id"`
+	ChatJID           string         `json:"chat_jid"`
+	SenderJID         string         `json:"sender_jid"`
+	SenderDisplayName string         `json:"sender_display_name"`
+	Content           string         `json:"content"`
+	Timestamp         string         `json:"timestamp"`
+	IsFromMe          bool           `json:"is_from_me"`
+	MediaType         string         `json:"media_type"`
+	Reactions         []ReactionInfo `json:"reactions,omitempty"`
+	CallMetadata      string         `json:"call_metadata,omitempty"`
+	Filename          string         `json:"filename"`
+	URL               string         `json:"url"`
+	LocalMediaPath    string         `json:"local_media_path"`
+	ReplyToMessageID  string         `json:"reply_to_message_id"`
+	QuotedText        string         `json:"quoted_text"`
+	QuotedSenderJID   string         `json:"quoted_sender_jid"`
+	FileLength        uint64         `json:"file_length"`
+	DeletedAt         string         `json:"deleted_at"`
+	CreatedAt         string         `json:"created_at"`
+	UpdatedAt         string         `json:"updated_at"`
 }
 
 type PaginationResponse struct {
